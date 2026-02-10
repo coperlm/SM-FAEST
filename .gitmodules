@@ -1,3 +1,6 @@
 [submodule "catch2"]
 	path = catch2
-	url = https://github.com/catchorg/Catch2.git
+	url = git@github.com:catchorg/Catch2.git
+[submodule "gmsm"]
+	path = gmsm
+	url = git@github.com:emmansun/gmsm.git

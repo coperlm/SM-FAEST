@@ -9,6 +9,7 @@
 #include "faest_impl.h"
 #include "aes.h"
 #include "faest_aes.h"
+#include "faest_sm4.h"
 #include "randomness.h"
 #include "random_oracle.h"
 #include "utils.h"
@@ -287,6 +288,10 @@ static bool check_challenge_3(const uint8_t* chall_3, unsigned int start, unsign
   return true;
 }
 
+static inline bool params_is_sm4(const faest_paramset_t* params) {
+  return params->R == 32;
+}
+
 static void free_pointer_array(uint8_t*** ptr) {
   free((*ptr)[0]);
   free(*ptr);
@@ -312,6 +317,27 @@ static inline void aes_verify(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q,
   switch (params->lambda) {
   default:
     aes_128_verifier(a0_tilde, d, Q, owf_in, owf_out, chall_2, chall_3, a1_tilde, a2_tilde, params);
+  }
+}
+
+static inline void sm4_prove(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde,
+                             const uint8_t* w, const uint8_t* u, uint8_t** V, const uint8_t* owf_in,
+                             const uint8_t* owf_out, const uint8_t* chall_2,
+                             const faest_paramset_t* params) {
+  switch (params->lambda) {
+  default:
+    sm4_128_prover(a0_tilde, a1_tilde, a2_tilde, w, u, V, owf_in, owf_out, chall_2, params);
+  }
+}
+
+static inline void sm4_verify(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q,
+                              const uint8_t* chall_2, const uint8_t* chall_3,
+                              const uint8_t* a1_tilde, const uint8_t* a2_tilde,
+                              const uint8_t* owf_in, const uint8_t* owf_out,
+                              const faest_paramset_t* params) {
+  switch (params->lambda) {
+  default:
+    sm4_128_verifier(a0_tilde, d, Q, owf_in, owf_out, chall_2, chall_3, a1_tilde, a2_tilde, params);
   }
 }
 
@@ -383,8 +409,13 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
   // ::16-20
   uint8_t a0_tilde[MAX_LAMBDA_BYTES];
-  aes_prove(a0_tilde, signature_a1_tilde(sig, params), signature_a2_tilde(sig, params), witness,
-            u + ell_bytes, V, owf_input, owf_output, chall_2, params);
+  if (params_is_sm4(params)) {
+    sm4_prove(a0_tilde, signature_a1_tilde(sig, params), signature_a2_tilde(sig, params), witness,
+              u + ell_bytes, V, owf_input, owf_output, chall_2, params);
+  } else {
+    aes_prove(a0_tilde, signature_a1_tilde(sig, params), signature_a2_tilde(sig, params), witness,
+              u + ell_bytes, V, owf_input, owf_output, chall_2, params);
+  }
 
   free_pointer_array(&V);
   free(u);
@@ -498,9 +529,15 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // Step 18
   const uint8_t* d = dsignature_d(sig, params);
   uint8_t a0_tilde[MAX_LAMBDA_BYTES];
-  aes_verify(a0_tilde, d, q, chall_2, dsignature_chall_3(sig, params),
-             dsignature_a1_tilde(sig, params), dsignature_a2_tilde(sig, params), owf_input,
-             owf_output, params);
+  if (params_is_sm4(params)) {
+    sm4_verify(a0_tilde, d, q, chall_2, dsignature_chall_3(sig, params),
+               dsignature_a1_tilde(sig, params), dsignature_a2_tilde(sig, params), owf_input,
+               owf_output, params);
+  } else {
+    aes_verify(a0_tilde, d, q, chall_2, dsignature_chall_3(sig, params),
+               dsignature_a1_tilde(sig, params), dsignature_a2_tilde(sig, params), owf_input,
+               owf_output, params);
+  }
   free_pointer_array(&q);
 
   // Step: 20

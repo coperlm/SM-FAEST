@@ -12,6 +12,8 @@
 
 // GF(2^8) with X^8 + X^4 + X^3 + X^1 + 1
 #define bf8_modulus (UINT8_C((1 << 4) | (1 << 3) | (1 << 1) | 1))
+// GF(2^8) with X^8 + X^7 + X^6 + X^5 + X^4 + X^2 + 1 (SM4)
+#define bf8_sm4_modulus (UINT8_C((1 << 7) | (1 << 6) | (1 << 5) | (1 << 4) | (1 << 2) | 1))
 // GF(2^64) with X^64 + X^4 + X^3 + X^1 + 1
 #define bf64_modulus (UINT64_C((1 << 4) | (1 << 3) | (1 << 1) | 1))
 // GF(2^128) with X^128 + X^7 + X^2 + X^1 + 1
@@ -84,6 +86,41 @@ bf8_t bf8_inv(bf8_t in) {
   const bf8_t t126 = bf8_square(t63);
   const bf8_t t252 = bf8_square(t126);
   return bf8_mul(t252, t2);
+}
+
+bf8_t bf8_mul_sm4(bf8_t lhs, bf8_t rhs) {
+  bf8_t result = -(rhs & 1) & lhs;
+  for (unsigned int idx = 1; idx < 8; ++idx) {
+    const uint8_t mask = -((lhs >> 7) & 1);
+    lhs                = (lhs << 1) ^ (mask & bf8_sm4_modulus);
+    result ^= -((rhs >> idx) & 1) & lhs;
+  }
+  return result;
+}
+
+bf8_t bf8_square_sm4(bf8_t lhs) {
+  bf8_t result = -(lhs & 1) & lhs;
+  bf8_t rhs    = lhs;
+  for (unsigned int idx = 1; idx < 8; ++idx) {
+    const uint8_t mask = -((lhs >> 7) & 1);
+    lhs                = (lhs << 1) ^ (mask & bf8_sm4_modulus);
+    result ^= -((rhs >> idx) & 1) & lhs;
+  }
+  return result;
+}
+
+bf8_t bf8_inv_sm4(bf8_t in) {
+  const bf8_t t2   = bf8_square_sm4(in);
+  const bf8_t t3   = bf8_mul_sm4(in, t2);
+  const bf8_t t5   = bf8_mul_sm4(t3, t2);
+  const bf8_t t7   = bf8_mul_sm4(t5, t2);
+  const bf8_t t14  = bf8_square_sm4(t7);
+  const bf8_t t28  = bf8_square_sm4(t14);
+  const bf8_t t56  = bf8_square_sm4(t28);
+  const bf8_t t63  = bf8_mul_sm4(t56, t7);
+  const bf8_t t126 = bf8_square_sm4(t63);
+  const bf8_t t252 = bf8_square_sm4(t126);
+  return bf8_mul_sm4(t252, t2);
 }
 
 // GF(2^64) implementation
