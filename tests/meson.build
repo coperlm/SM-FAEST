@@ -11,7 +11,11 @@ if boost_test.found()
     'hash_shake.cpp',
     'instances.cpp',
     'owf.cpp',
+    'owf_sm4.cpp',
     'prg.cpp',
+    'prg_sm4.cpp',
+    'sm4.cpp',
+    'sm4_constraints.cpp',
     'universal_hashing.cpp',
     'utils.cpp',
     'vole.cpp',
@@ -99,6 +103,30 @@ if boost_test.found()
     'VOLE',
     extended_tests,
     args: ['-t', 'vole'],
+    timeout: 6000,
+  )
+  test(
+    'SM4',
+    extended_tests,
+    args: ['-t', 'sm4'],
+    timeout: 6000,
+  )
+  test(
+    'SM4_Constraints',
+    extended_tests,
+    args: ['-t', 'sm4_constraints'],
+    timeout: 6000,
+  )
+  test(
+    'OWF_SM4',
+    extended_tests,
+    args: ['-t', 'owf_sm4'],
+    timeout: 6000,
+  )
+  test(
+    'PRG_SM4',
+    extended_tests,
+    args: ['-t', 'prg_sm4'],
     timeout: 6000,
   )
   if ntl.found()

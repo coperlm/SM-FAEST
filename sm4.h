@@ -54,16 +54,16 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
 // ============ PRG 函数（SM4-CTR 模式）============
 
 // 基础 PRG
-void prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-         unsigned int bits, size_t outlen);
+void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+             unsigned int bits, size_t outlen);
 
 // PRG 输出 2λ 位
-void prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-                  unsigned int bits);
+void sm4_prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+                      unsigned int bits);
 
 // PRG 输出 4λ 位
-void prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-                  unsigned int bits);
+void sm4_prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+                      unsigned int bits);
 
 // ============ 辅助函数 ============
 

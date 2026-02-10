@@ -201,74 +201,28 @@ param_128s.set('OWF_INPUT_SIZE', 16)
 param_128s.set('OWF_OUTPUT_SIZE', 16)
 parameter_sets += param_128s
 
-# parameter set: FAEST-128f
-param_128f = configuration_data()
-param_128f.set('PARAM', '128F')
-param_128f.set('PARAM_L', '128f')
-param_128f.set('LAMBDA', 128)
-param_128f.set('Nst', 4)
-param_128f.set('Ske', 40)
-param_128f.set('R', 10)
-param_128f.set('Senc', 160)
-param_128f.set('BETA', 1)
-param_128f.set('ELL', 1280)
-param_128f.set('Lke', 448)
-param_128f.set('Lenc', 832)
-param_128f.set('TAU', 16)
-param_128f.set('W_GRIND', 8)
-param_128f.set('T_OPEN', 110)
-param_128f.set('SIG_SIZE', 5924)
-param_128f.set('PK_SIZE', 32)
-param_128f.set('SK_SIZE', 32)
-param_128f.set('OWF_INPUT_SIZE', 16)
-param_128f.set('OWF_OUTPUT_SIZE', 16)
-parameter_sets += param_128f
-
-# parameter set: FAEST-EM-128s
-param_em_128s = configuration_data()
-param_em_128s.set('PARAM', 'EM_128S')
-param_em_128s.set('PARAM_L', 'em_128s')
-param_em_128s.set('LAMBDA', 128)
-param_em_128s.set('Nst', 4)
-param_em_128s.set('Ske', 0)
-param_em_128s.set('R', 10)
-param_em_128s.set('Senc', 160)
-param_em_128s.set('BETA', 1)
-param_em_128s.set('ELL', 960)
-param_em_128s.set('Lke', 128)
-param_em_128s.set('Lenc', 832)
-param_em_128s.set('TAU', 11)
-param_em_128s.set('W_GRIND', 7)
-param_em_128s.set('T_OPEN', 103)
-param_em_128s.set('SIG_SIZE', 3906)
-param_em_128s.set('PK_SIZE', 32)
-param_em_128s.set('SK_SIZE', 32)
-param_em_128s.set('OWF_INPUT_SIZE', 16)
-param_em_128s.set('OWF_OUTPUT_SIZE', 16)
-parameter_sets += param_em_128s
-
-# parameter set: FAEST-EM-128f
-param_em_128f = configuration_data()
-param_em_128f.set('PARAM', 'EM_128F')
-param_em_128f.set('PARAM_L', 'em_128f')
-param_em_128f.set('LAMBDA', 128)
-param_em_128f.set('Nst', 4)
-param_em_128f.set('Ske', 0)
-param_em_128f.set('R', 10)
-param_em_128f.set('Senc', 160)
-param_em_128f.set('BETA', 1)
-param_em_128f.set('ELL', 960)
-param_em_128f.set('Lke', 128)
-param_em_128f.set('Lenc', 832)
-param_em_128f.set('TAU', 16)
-param_em_128f.set('W_GRIND', 8)
-param_em_128f.set('T_OPEN', 112)
-param_em_128f.set('SIG_SIZE', 5060)
-param_em_128f.set('PK_SIZE', 32)
-param_em_128f.set('SK_SIZE', 32)
-param_em_128f.set('OWF_INPUT_SIZE', 16)
-param_em_128f.set('OWF_OUTPUT_SIZE', 16)
-parameter_sets += param_em_128f
+# parameter set: FAEST-SM4-128s
+param_sm4_128s = configuration_data()
+param_sm4_128s.set('PARAM', 'SM4_128S')
+param_sm4_128s.set('PARAM_L', 'sm4_128s')
+param_sm4_128s.set('LAMBDA', 128)
+param_sm4_128s.set('Nst', 4)
+param_sm4_128s.set('Ske', 128)
+param_sm4_128s.set('R', 32)
+param_sm4_128s.set('Senc', 124)
+param_sm4_128s.set('BETA', 1)
+param_sm4_128s.set('ELL', 2944)
+param_sm4_128s.set('Lke', 512)
+param_sm4_128s.set('Lenc', 2432)
+param_sm4_128s.set('TAU', 11)
+param_sm4_128s.set('W_GRIND', 7)
+param_sm4_128s.set('T_OPEN', 102)
+param_sm4_128s.set('SIG_SIZE', 7000)
+param_sm4_128s.set('PK_SIZE', 32)
+param_sm4_128s.set('SK_SIZE', 32)
+param_sm4_128s.set('OWF_INPUT_SIZE', 16)
+param_sm4_128s.set('OWF_OUTPUT_SIZE', 16)
+parameter_sets += param_sm4_128s
 
 # also make data from all parameter sets available "globally"
 parameter_data = configuration_data()
@@ -347,10 +301,13 @@ faest_sources = files(
   'bavc.c',
   'compat.c',
   'faest_impl.c',
+  'faest_sm4.c',
   'fields.c',
   'instances.c',
   'owf.c',
+  'owf_sm4.c',
   'random_oracle.c',
+  'sm4.c',
   'universal_hashing.c',
   'utils.c',
   'vole.c',
@@ -428,8 +385,10 @@ foreach parameter_set : parameter_sets
     output: 'faest_@0@.h'.format(parameter_set.get('PARAM_L')),
     configuration: parameter_set,
   )
+  # Use SM4-specific template for SM4 parameter sets
+  param_template = parameter_set.get('PARAM').contains('SM4') ? 'faest_param_sm4.c.in' : 'faest_param.c.in'
   faest_sources += configure_file(
-    input: 'faest_param.c.in',
+    input: param_template,
     output: 'faest_@0@.c'.format(parameter_set.get('PARAM_L')),
     configuration: parameter_set,
   )
