@@ -12,6 +12,11 @@
 #include "utils.h"
 
 #include <string.h>
+#include <stdio.h>
+
+#ifndef FAEST_SM4_DEBUG
+#define FAEST_SM4_DEBUG 1
+#endif
 
 // ============ SM4 S-box (国密标准 GM/T 0002-2012) ============
 static const uint8_t SM4_SBOX[256] = {
@@ -193,30 +198,14 @@ void sm4_prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uin
   sm4_prg(key, iv, tweak, out, bits, 4 * lambda_bytes);
 }
 
-// ============ 辅助函数：inverse norm（用于见证）============
-// SM4 S-box 输出到 SM4 域逆元的映射
-// 由 S-box 表和 GF(2^8) 逆元生成的查找表（多项式 0x1F5）
-static inline uint8_t sm4_invnorm(uint8_t in) {
-  static const uint8_t sm4_invnorm_table[256] = {
-      0x80, 0xda, 0x26, 0xd4, 0x70, 0x8f, 0xbd, 0x36, 0xff, 0xfd, 0xbe, 0x77, 0x98, 0x03, 0x10, 0x3f,
-      0xce, 0xf8, 0xd9, 0x3b, 0x32, 0xb1, 0xc4, 0x42, 0x29, 0x86, 0x43, 0x54, 0x0a, 0xc7, 0xbc, 0x45,
-      0xf1, 0xd8, 0x9c, 0xd5, 0x1f, 0x89, 0x82, 0x0d, 0x2b, 0x25, 0x19, 0x62, 0xb0, 0x6d, 0xa6, 0x48,
-      0x24, 0x4e, 0xa8, 0xf6, 0x07, 0x55, 0xb2, 0x79, 0x4b, 0xe6, 0x13, 0x22, 0xae, 0x56, 0xad, 0xca,
-      0x23, 0x5b, 0x8c, 0x0c, 0x14, 0x53, 0xc5, 0xe2, 0x35, 0x58, 0x37, 0xcb, 0x52, 0x28, 0x4a, 0xd2,
-      0x6b, 0xdc, 0x2a, 0xfb, 0xf0, 0x47, 0x5c, 0x09, 0x7c, 0x9e, 0xcd, 0xd0, 0x3e, 0x4f, 0xd7, 0x02,
-      0xe8, 0x30, 0x75, 0x05, 0x5f, 0xa7, 0x4d, 0xd6, 0x7b, 0x33, 0x2e, 0x27, 0x1e, 0x60, 0xea, 0x87,
-      0x5d, 0xc1, 0x74, 0xcc, 0xdb, 0xa4, 0xf4, 0xfe, 0x8b, 0xc8, 0x51, 0x11, 0x85, 0x59, 0x34, 0xa0,
-      0x2c, 0x78, 0x3c, 0xb7, 0x18, 0xa5, 0xf3, 0x67, 0x93, 0x0b, 0x1b, 0x94, 0x88, 0x5e, 0x9f, 0x4c,
-      0x01, 0x9b, 0x12, 0xb5, 0x83, 0xe3, 0xb4, 0x40, 0x7a, 0x61, 0xc3, 0x57, 0x31, 0xc0, 0x39, 0xbb,
-      0x65, 0x0f, 0x6f, 0x9d, 0xd3, 0xb8, 0x5a, 0x46, 0x92, 0xe1, 0xef, 0xb9, 0xba, 0xe4, 0xc6, 0xf5,
-      0xf9, 0x49, 0xb3, 0x20, 0xc9, 0xaf, 0x73, 0x95, 0xbf, 0xa2, 0x97, 0x08, 0x91, 0x63, 0xee, 0x17,
-      0x9a, 0xdd, 0xe0, 0x81, 0x04, 0xfc, 0x15, 0x6a, 0x2d, 0xe7, 0xa3, 0xeb, 0x7d, 0xaa, 0x6e, 0x7e,
-      0x6c, 0x8a, 0x3a, 0x2f, 0x16, 0x0e, 0x00, 0xec, 0x44, 0xde, 0x06, 0x8e, 0xc2, 0x72, 0xe5, 0x7f,
-      0xa1, 0x64, 0xe9, 0xb6, 0x8d, 0xd1, 0x3d, 0x50, 0x41, 0xfa, 0x71, 0xf2, 0x1d, 0x38, 0xdf, 0xa9,
-      0xf7, 0xed, 0x66, 0xcf, 0x84, 0x69, 0x90, 0x68, 0x1c, 0x21, 0x1a, 0x76, 0x96, 0x99, 0xac, 0xab
-  };
+// ============ 辅助函数：逆仿射（用于见证）============
+static inline uint8_t sm4_rotl8(uint8_t v, unsigned int n) {
+  return (uint8_t)((v << n) | (v >> (8 - n)));
+}
 
-  return sm4_invnorm_table[in];
+static inline uint8_t sm4_inverse_affine(uint8_t sbox_out) {
+  uint8_t y = sbox_out ^ 0xD6;  // 0xD6 是 SM4 仿射常数 C
+  return (uint8_t)(sm4_rotl8(y, 7) ^ sm4_rotl8(y, 5) ^ sm4_rotl8(y, 1));
 }
 
 // ============ 扩展见证（ZK 证明用）============
@@ -230,6 +219,15 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
 
   const uint8_t* actual_key = key;
   const uint8_t* actual_in  = in;
+
+#if defined(FAEST_SM4_DEBUG)
+  fprintf(stderr,
+          "[SM4_DEBUG] witness_layout base=%p Lke_bytes=%u l_bytes=%u is_em=%u\n",
+          (void*)w_out, params->Lke / 8, params->l / 8, is_em ? 1u : 0u);
+  fprintf(stderr,
+          "[SM4_DEBUG] witness_layout enc_rounds=1..%u odd_round_bytes=8 even_round_bytes=16\n",
+          params->R - 1);
+#endif
   
   // EM 模式：交换 key 和 input
   if (is_em) {
@@ -241,31 +239,63 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   // 步骤 1: 生成轮密钥
   sm4_round_keys_t rk;
   sm4_init_round_keys(&rk, actual_key);
+
+  // 维护 K[0..35]（用于生成 τ(X) 以写入正确的 inv_norm）
+  uint32_t K[SM4_ROUNDS + 4];
+  for (unsigned int i = 0; i < 4; ++i) {
+    K[i] = sm4_bytes_to_uint32(actual_key + 4 * i) ^ FK[i];
+  }
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    K[round + 4] = rk.round_keys[round];
+  }
   
   // 步骤 2: 记录密钥扩展见证（标准模式需要，EM 模式跳过）
   if (!is_em) {
     const unsigned int nk = params->lambda / 32; // SM4-128: nk = 4
-    
+#if defined(FAEST_SM4_DEBUG)
+    size_t seg_start = (size_t)(w - w_out);
+#endif
     // 记录初始密钥（nk 个字），使用 K[0..3] = MK ^ FK
     for (unsigned int i = 0; i != nk; ++i) {
-      uint32_t k_word = sm4_bytes_to_uint32(actual_key + 4 * i) ^ FK[i];
-      sm4_uint32_to_bytes(k_word, w);
+      sm4_uint32_to_bytes(K[i], w);
       w += 4;
     }
+#if defined(FAEST_SM4_DEBUG)
+    fprintf(stderr,
+            "[SM4_DEBUG] witness_layout keyexp_mk range=[%zu..%zu]\n",
+            seg_start, (size_t)(w - w_out - 1));
+    seg_start = (size_t)(w - w_out);
+#endif
     
-    // 计算需要额外记录的轮密钥数量
-    // Lke = nk * 32 + 额外比特数
-    // 额外字数 = (Lke - nk * 32) / 32
-    const unsigned int extra_words = (params->Lke - nk * 32) / 32;
-    
-    // 记录选定的轮密钥
-    // SM4 有 32 个轮密钥，按间隔选择记录
-    for (unsigned int j = 0; j < extra_words; ++j) {
-      // 计算要记录的轮密钥索引（均匀分布）
-      unsigned int rk_idx = (j * SM4_ROUNDS) / extra_words;
-      sm4_uint32_to_bytes(rk.round_keys[rk_idx], w);
+    // 记录全部 32 轮密钥 K[4..35]
+    for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+      sm4_uint32_to_bytes(rk.round_keys[round], w);
       w += 4;
     }
+#if defined(FAEST_SM4_DEBUG)
+    fprintf(stderr,
+            "[SM4_DEBUG] witness_layout keyexp_rk range=[%zu..%zu]\n",
+            seg_start, (size_t)(w - w_out - 1));
+    seg_start = (size_t)(w - w_out);
+#endif
+
+    // 记录每轮 τ(X) 的逆范数（4 字节），总计 32*4 = 128 字节
+    for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+      // X = K[i+1] ⊕ K[i+2] ⊕ K[i+3] ⊕ CK[i]
+      uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
+      uint32_t tau_x = sm4_tau(x);  // τ(X) = S-box 应用后的结果
+
+      uint8_t tau_bytes[4];
+      sm4_uint32_to_bytes(tau_x, tau_bytes);
+      for (unsigned int j = 0; j < 4; ++j) {
+        *w++ = sm4_inverse_affine(tau_bytes[j]);
+      }
+    }
+#if defined(FAEST_SM4_DEBUG)
+    fprintf(stderr,
+            "[SM4_DEBUG] witness_layout keyexp_inv_norm range=[%zu..%zu]\n",
+            seg_start, (size_t)(w - w_out - 1));
+#endif
   } else {
     const unsigned int lambda_bytes = params->lambda / 8;
     
@@ -277,6 +307,11 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   assert(w - w_out == params->Lke / 8);
   
   // 步骤 3: 记录加密过程的中间状态
+#if defined(FAEST_SM4_DEBUG)
+  fprintf(stderr,
+          "[SM4_DEBUG] witness_layout enc_start offset=%zu\n",
+          (size_t)(w - w_out));
+#endif
   uint32_t state[4]; // 当前状态 X[i..i+3]
   
   // 加载明文/输入
@@ -287,12 +322,14 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   // 32 轮迭代，记录中间状态（从 round=1 开始，类似 AES）
   for (unsigned int round = 1; round < params->R; round++) {
     if (round % 2 == 1) {
-      // 奇数轮：记录 S-box 输入的 inverse norm
+      // 奇数轮：记录 S-box 输出（4 字节）以及逆元（4 字节）
       uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
       uint8_t temp_bytes[4];
       sm4_uint32_to_bytes(temp, temp_bytes);
       for (int j = 0; j < 4; j++) {
-        *w++ = sm4_invnorm(sm4_sbox(temp_bytes[j]));
+        uint8_t sbox_out = sm4_sbox(temp_bytes[j]);
+        *w++ = sbox_out;
+        *w++ = sm4_inverse_affine(sbox_out);
       }
     }
     

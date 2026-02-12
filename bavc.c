@@ -15,8 +15,28 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
 
 #define NODE(nodes, node, lambda_bytes) (&nodes[(node) * (lambda_bytes)])
+
+#if defined(FAEST_SM4_DEBUG)
+static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
+  uint64_t h = 1469598103934665603ULL;
+  for (size_t i = 0; i < len; ++i) {
+    h ^= (uint64_t)data[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+static uint64_t sm4_hash64_fnv1a_update(uint64_t h, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    h ^= (uint64_t)data[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+#endif
 
 static void expand_seeds(uint8_t* nodes, const uint8_t* iv, const faest_paramset_t* params) {
   const unsigned int lambda_bytes = params->lambda / 8;
@@ -266,6 +286,31 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
   return true;
 }
 
+bool bavc_open_sm4(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
+                   const faest_paramset_t* params) {
+#if defined(FAEST_SM4_DEBUG)
+  const unsigned int lambda_bytes = params->lambda / 8;
+  const unsigned int com_size     = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
+  fprintf(stderr,
+          "[SM4_DEBUG] bavc_open_sm4 tau=%u tau1=%u k=%u L=%u T_open=%u com_size=%u\n",
+          params->tau, params->tau1, params->k, params->L, params->T_open, com_size);
+
+  uint64_t s_hash = 1469598103934665603ULL;
+  unsigned int offset = 0;
+  for (unsigned int i = 0; i < params->tau; ++i) {
+    const unsigned int Ni = bavc_max_node_index(i, params->tau1, params->k);
+    for (unsigned int j = 0; j < Ni; ++j, ++offset) {
+      if (j != i_delta[i]) {
+        s_hash = sm4_hash64_fnv1a_update(s_hash, vc->sd + offset * lambda_bytes, lambda_bytes);
+      }
+    }
+  }
+  fprintf(stderr, "[SM4_DEBUG] bavc_open_sm4 s_hash=0x%016llx\n",
+          (unsigned long long)s_hash);
+#endif
+  return bavc_open(decom_i, vc, i_delta, params);
+}
+
 static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
                              const uint16_t* i_delta, const uint8_t* iv,
                              const faest_paramset_t* params) {
@@ -440,6 +485,36 @@ bool bavc_reconstruct(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16
                       const uint8_t* iv, const faest_paramset_t* params) {
   return faest_is_em(params) ? bavc_reconstruct_faest_em(bavc_rec, decom_i, i_delta, iv, params)
                              : bavc_reconstruct_faest(bavc_rec, decom_i, i_delta, iv, params);
+}
+
+bool bavc_reconstruct_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,
+                          const uint8_t* iv, const faest_paramset_t* params) {
+  const bool ok = bavc_reconstruct(bavc_rec, decom_i, i_delta, iv, params);
+#if defined(FAEST_SM4_DEBUG)
+  const unsigned int lambda_bytes = params->lambda / 8;
+  const unsigned int com_size     = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
+  fprintf(stderr,
+          "[SM4_DEBUG] bavc_reconstruct_sm4 tau=%u tau1=%u k=%u L=%u T_open=%u com_size=%u\n",
+          params->tau, params->tau1, params->k, params->L, params->T_open, com_size);
+  if (ok) {
+    const unsigned int tau = params->tau;
+    const unsigned int L   = params->L;
+    const unsigned int limit = (tau < 3u) ? tau : 3u;
+    const uint8_t* nodes = decom_i + (faest_is_em(params) ? 2 : 3) * tau * lambda_bytes;
+    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 sample nodes:");
+    for (unsigned int i = 0; i < limit; ++i) {
+      const unsigned int alpha = pos_in_tree(i, i_delta[i], params);
+      fprintf(stderr, " (i=%u alpha=%u)", i, alpha);
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 nodes_range=[%zu,%zu)\n",
+            (size_t)(nodes - decom_i),
+            (size_t)(nodes - decom_i + params->T_open * lambda_bytes));
+    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 s_hash=0x%016llx\n",
+            (unsigned long long)sm4_hash64_fnv1a(bavc_rec->s, (size_t)(L - tau) * lambda_bytes));
+  }
+#endif
+  return ok;
 }
 
 void bavc_clear(bavc_t* com) {

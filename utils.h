@@ -42,6 +42,8 @@ static inline void masked_xor_u8_array(const uint8_t* a, const uint8_t* b, uint8
 // DecodeAllChall_3
 bool decode_all_chall_3(uint16_t* decoded_chall, const uint8_t* chall,
                         const faest_paramset_t* params);
+bool decode_all_chall_3_sm4(uint16_t* decoded_chall, const uint8_t* chall,
+                            const faest_paramset_t* params);
 
 FAEST_END_C_DECL
 

@@ -6,12 +6,32 @@
 #include <config.h>
 #endif
 
+#ifndef FAEST_SM4_DEBUG
+#define FAEST_SM4_DEBUG 1
+#endif
+
 #include "instances.h"
 #include "universal_hashing.h"
 #include "utils.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
+
+#if defined(FAEST_SM4_DEBUG)
+static void zk_dbg_dump_vec(const char* label, size_t step, const bf128_t* v, size_t n) {
+  uint8_t buf[BF128_NUM_BYTES];
+  fprintf(stderr, "[SM4_DEBUG] %s step=%zu", label, step);
+  for (size_t i = 0; i < n; ++i) {
+    bf128_store(buf, v[i]);
+    fprintf(stderr, " h%zu=", i);
+    for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+      fprintf(stderr, "%02x", buf[j]);
+    }
+  }
+  fprintf(stderr, "\n");
+}
+#endif
 
 static bf64_t compute_h1(const uint8_t* t, const uint8_t* x, unsigned int lambda,
                          unsigned int ell) {
@@ -165,11 +185,31 @@ void zk_hash_128_init(zk_hash_128_ctx* ctx, const uint8_t* sd) {
   ctx->s  = bf128_load(s);
   ctx->t  = bf64_load(t);
   ctx->sd = sd;
+#if defined(FAEST_SM4_DEBUG)
+  static size_t counter = 0;
+  zk_dbg_dump_vec("zk128 init", counter++, &ctx->h0, 1);
+#endif
 }
 
 void zk_hash_128_update(zk_hash_128_ctx* ctx, bf128_t v) {
+  static size_t counter = 0;
+#if defined(FAEST_SM4_DEBUG)
+  uint8_t vin[BF128_NUM_BYTES];
+  bf128_store(vin, v);
+  fprintf(stderr, "[SM4_DEBUG] zk128 input step=%zu x=", counter);
+  for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+    fprintf(stderr, "%02x", vin[j]);
+  }
+  fprintf(stderr, "\n");
+#endif
+
   ctx->h0 = bf128_add(bf128_mul(ctx->h0, ctx->s), v);
   ctx->h1 = bf128_add(bf128_mul_64(ctx->h1, ctx->t), v);
+#if defined(FAEST_SM4_DEBUG)
+  bf128_t hs[2] = {ctx->h0, ctx->h1};
+  zk_dbg_dump_vec("zk128 update", counter, hs, 2);
+  ++counter;
+#endif
 }
 
 void zk_hash_128_finalize(uint8_t* h, zk_hash_128_ctx* ctx, bf128_t x1) {
@@ -179,6 +219,16 @@ void zk_hash_128_finalize(uint8_t* h, zk_hash_128_ctx* ctx, bf128_t x1) {
   bf128_store(h, bf128_add(bf128_add(bf128_mul(bf128_load(r0), ctx->h0),
                                      bf128_mul(bf128_load(r1), ctx->h1)),
                            x1));
+#if defined(FAEST_SM4_DEBUG)
+  static size_t counter = 0;
+  uint8_t buf[BF128_NUM_BYTES];
+  bf128_store(buf, bf128_load(h));
+  fprintf(stderr, "[SM4_DEBUG] zk128 finalize step=%zu h=", counter++);
+  for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+    fprintf(stderr, "%02x", buf[j]);
+  }
+  fprintf(stderr, "\n");
+#endif
 }
 
 void zk_hash_128_3_init(zk_hash_128_3_ctx* ctx, const uint8_t* sd) {
@@ -194,15 +244,44 @@ void zk_hash_128_3_init(zk_hash_128_3_ctx* ctx, const uint8_t* sd) {
   ctx->s     = bf128_load(s);
   ctx->t     = bf64_load(t);
   ctx->sd    = sd;
+#if defined(FAEST_SM4_DEBUG)
+  static size_t counter = 0;
+  zk_dbg_dump_vec("zk128_3 init h0", counter, ctx->h0, 3);
+  zk_dbg_dump_vec("zk128_3 init h1", counter++, ctx->h1, 3);
+#endif
 }
 
 void zk_hash_128_3_update(zk_hash_128_3_ctx* ctx, bf128_t v_0, bf128_t v_1, bf128_t v_2) {
+  static size_t counter = 0;
+#if defined(FAEST_SM4_DEBUG)
+  uint8_t vin0[BF128_NUM_BYTES], vin1[BF128_NUM_BYTES], vin2[BF128_NUM_BYTES];
+  bf128_store(vin0, v_0);
+  bf128_store(vin1, v_1);
+  bf128_store(vin2, v_2);
+  fprintf(stderr, "[SM4_DEBUG] zk128_3 input step=%zu v0=", counter);
+  for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+    fprintf(stderr, "%02x", vin0[j]);
+  }
+  fprintf(stderr, " v1=");
+  for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+    fprintf(stderr, "%02x", vin1[j]);
+  }
+  fprintf(stderr, " v2=");
+  for (size_t j = 0; j < BF128_NUM_BYTES; ++j) {
+    fprintf(stderr, "%02x", vin2[j]);
+  }
+  fprintf(stderr, "\n");
+#endif
   ctx->h0[0] = bf128_add(bf128_mul(ctx->h0[0], ctx->s), v_0);
   ctx->h1[0] = bf128_add(bf128_mul_64(ctx->h1[0], ctx->t), v_0);
   ctx->h0[1] = bf128_add(bf128_mul(ctx->h0[1], ctx->s), v_1);
   ctx->h1[1] = bf128_add(bf128_mul_64(ctx->h1[1], ctx->t), v_1);
   ctx->h0[2] = bf128_add(bf128_mul(ctx->h0[2], ctx->s), v_2);
   ctx->h1[2] = bf128_add(bf128_mul_64(ctx->h1[2], ctx->t), v_2);
+#if defined(FAEST_SM4_DEBUG)
+  zk_dbg_dump_vec("zk128_3 update h0", counter, ctx->h0, 3);
+  zk_dbg_dump_vec("zk128_3 update h1", counter++, ctx->h1, 3);
+#endif
 }
 
 void zk_hash_128_3_raise_and_update(zk_hash_128_3_ctx* ctx, bf128_t v_1, bf128_t v_2) {
@@ -220,6 +299,11 @@ void zk_hash_128_3_finalize(uint8_t* h_0, uint8_t* h_1, uint8_t* h_2, zk_hash_12
               bf128_add(bf128_add(bf128_mul(r0, ctx->h0[1]), bf128_mul(r1, ctx->h1[1])), x1_1));
   bf128_store(h_2,
               bf128_add(bf128_add(bf128_mul(r0, ctx->h0[2]), bf128_mul(r1, ctx->h1[2])), x1_2));
+#if defined(FAEST_SM4_DEBUG)
+  static size_t counter = 0;
+  bf128_t outs[3] = {bf128_load(h_0), bf128_load(h_1), bf128_load(h_2)};
+  zk_dbg_dump_vec("zk128_3 finalize", counter++, outs, 3);
+#endif
 }
 
 void zk_hash_192_init(zk_hash_192_ctx* ctx, const uint8_t* sd) {

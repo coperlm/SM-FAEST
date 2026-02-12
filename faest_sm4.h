@@ -25,6 +25,10 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                       const uint8_t* a1_tilde, const uint8_t* a2_tilde,
                       const faest_paramset_t* params);
 
+// SM4 专用：根据大端 32-bit 词布局生成 d = w ⊕ u（位翻转对齐 VOLE 行）
+void sm4_pack_d_big_endian(uint8_t* dst, const uint8_t* witness, const uint8_t* u,
+                           unsigned int ell_bits);
+
 FAEST_END_C_DECL
 
 #endif

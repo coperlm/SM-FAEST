@@ -18,6 +18,15 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
 bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_t* chall_3,
                       const uint8_t* decom_i, const uint8_t* c, unsigned int ellhat,
                       const faest_paramset_t* params);
+bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_t* chall_3,
+                          const uint8_t* decom_i, const uint8_t* c, unsigned int ellhat,
+                          const faest_paramset_t* params);
+
+#if defined(FAEST_SM4_DEBUG)
+void vole_debug_reconstruct_like_from_commit(const bavc_t* bavc, const uint16_t* i_delta,
+                                             const uint8_t* iv, unsigned int ellhat,
+                                             const faest_paramset_t* params);
+#endif
 
 #if defined(FAEST_TESTS)
 unsigned int convert_to_vole(const uint8_t* iv, const uint8_t* sd, bool sd0_bot, unsigned int i,
