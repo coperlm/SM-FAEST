@@ -212,8 +212,8 @@ static inline uint8_t sm4_inverse_affine(uint8_t sbox_out) {
 void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
                         const faest_paramset_t* params) {
   const bool is_em = (params->Ske == 0); // 检查是否为 EM 模式
-  
-#if !defined(NDEBUG)
+
+#if defined(FAEST_SM4_DEBUG)
   uint8_t* const w_out = w;
 #endif
 

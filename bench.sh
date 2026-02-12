@@ -8,6 +8,7 @@ FAEST_128S="faest_128s"
 ALL="FAEST_128S"
 
 BUILD_DIR="build_release"
+SM4_DEBUG_FILTER="${SM4_DEBUG_FILTER:-1}"
 
 clean () {
     ninja -C "${BUILD_DIR}" clean >&2
@@ -25,7 +26,11 @@ run_test () {
     name="$1"
     setting_id="$2"
     echo "# Testing: ${name} (${setting_id})" >&2
-    "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2
+    if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
+        "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2 2> >(grep -v '^\[SM4_DEBUG\]' >&2)
+    else
+        "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2
+    fi
 }
 
 convert_to_us () {
@@ -98,7 +103,11 @@ run_bench () {
 
     meta="`gather_metadata`"
 
-    bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]'`"
+    if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
+        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]' 2> >(grep -v '^\[SM4_DEBUG\]' >&2)`"
+    else
+        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]'`"
+    fi
 
     bench_keygen_out="`echo "${bench_out}" | grep -P '^keygen' -A 2`"
     bench_sign_out="`echo "${bench_out}" | grep -P '^sign' -A 2`"
