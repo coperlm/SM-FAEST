@@ -4,3 +4,6 @@
 [submodule "gmsm"]
 	path = gmsm
 	url = git@github.com:emmansun/gmsm.git
+[submodule "gmssl"]
+	path = gmssl
+	url = git@github.com:guanzhi/GmSSL.git
