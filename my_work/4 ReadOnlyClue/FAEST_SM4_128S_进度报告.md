@@ -30,6 +30,22 @@
 
 结论：本次修复未破坏原始 FAEST（AES 路径）。
 
+### 2.3 深入调试 FAEST_SM4_128S 验证失败
+- 启用了 `FAEST_SM4_DEBUG` 宏，获取详细中间态输出。
+- 添加了诊断打印：prover 的 v_star0/1 和 verifier 的 bf_delta, q_star_0/1。
+- 确认根因：prover 和 verifier 的 q_star 值不匹配，导致 post-delta 检查失败（match ~1300/5120）。
+- 尝试修复：
+  - 切换位提取端序（小端到大端）。
+  - 应用字节/字排列（基于启发式最佳配置）。
+  - 调整行映射（使用 sm4_map_row_to_word_swap）。
+  - 修改 d_bit 提取端序。
+- 结果：q_star 仍不匹配，post-delta 匹配率未显著改善（未达预期 81/128）。
+- 验证：禁用调试输出后问题仍存，确认非日志影响。
+
+### 2.4 验证 SM4 原语层稳定性
+- `meson test -C build SM4 SM4_Constraints OWF_SM4 PRG_SM4 --print-errorlogs`：**4/4 PASS**
+- 结论：问题位于集成层（prover/verifier 一致性），非原语层。
+
 ---
 
 ## 3. 仍未解决的问题（FAEST_SM4_128S）
@@ -42,11 +58,13 @@ meson test -C build FAEST_SM4_128S faest_sm4_128s_api_test --print-errorlogs
 ### 3.2 失败表现
 - `faest_sm4_128s_api_test` 失败（exit 255）。
 - `FAEST_SM4_128S` 失败（exit 201），日志尾部可见 `6 failures`。
-- 日志出现 `q_star` 与 `q_tilde` 不一致，以及大量 `SM4_DEBUG` 中间态输出。
+- 日志显示 q_star prover/verifier 不匹配，以及大量 post-delta 不匹配（match ~1300/5120）。
 
 ### 3.3 当前定位结论
-- 更可能是 `FAEST_SM4_128S` 的 prover/verifier 集成一致性问题（见证扩展、约束拼装、挑战绑定、最终对比链路之一）。
-- 不是“SM4 基础算法不可用”导致。
+- 根因：prover 和 verifier 的 q_key 不同，导致 q_star_0/1 计算不一致。
+- 可能原因：column_to_row_major_and_shrink_V_128_sm4 的转换逻辑有误（位/字节/字端序或排列）。
+- 启发式证据：某些排列可改善匹配至 81/128，但未在代码中重现。
+- 排除：非 SM4 原语问题，非调试输出影响。
 
 ---
 
@@ -54,7 +72,7 @@ meson test -C build FAEST_SM4_128S faest_sm4_128s_api_test --print-errorlogs
 
 - 阻塞 1：日志过量（千行级）导致“首个错误点”难以识别。
 - 阻塞 2：当前缺少“阶段边界一致性断言”来快速切分失败区间。
-- 阻塞 3：工作区非完全干净（`.gitignore` 修改、若干 `.bak` 删除）会增加回归比较噪声。
+- 阻塞 3：转换函数排列尝试未达预期改善，需更系统化方法。
 
 ---
 
@@ -71,6 +89,7 @@ meson test -C build FAEST_SM4_128S faest_sm4_128s_api_test --print-errorlogs
 ### P1（随后）
 1. 以固定随机种子重复 `FAEST_SM4_128S` 测试。
 2. 使用二分法定位“最后正确阶段”与“第一错误阶段”。
+3. 实现代码中的排列搜索，自动找到最佳字节/字/位配置。
 
 ### P2（收敛）
 1. 为 `FAEST_SM4_128S` 加入轻量一致性回归（防止同类回归）。
@@ -95,6 +114,6 @@ meson test -C build_release FAEST_128S faest_128s_api_test AES --print-errorlogs
 
 ## 7. 结论
 
-- `FAEST_SM4_128S` 目前是**集成正确性问题**，不是编译链问题，也不是 SM4 原语问题。
+- `FAEST_SM4_128S` 目前是**集成正确性问题**，具体为 prover/verifier q_key 不一致，导致 q_star 和 post-delta 失败。
 - 原始 FAEST（AES 路径）已验证通过，可继续作为稳定基线。
-- 建议下一阶段集中做“首错定位”而非继续扩大日志。
+- 建议下一阶段集中做“首错定位”和“排列优化”而非继续扩大日志。

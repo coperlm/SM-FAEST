@@ -8,14 +8,20 @@
 
 #include "vole.h"
 #include "aes.h"
+#include "sm4.h"
 #include "utils.h"
 #include "random_oracle.h"
+#include "instances.h"
 
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 
 static const uint32_t TWEAK_OFFSET = UINT32_C(0x80000000); // 2^31
+
+static inline bool params_is_sm4(const faest_paramset_t* params) {
+  return params->R == 32;
+}
 
 #if defined(FAEST_SM4_DEBUG)
 static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
@@ -67,12 +73,20 @@ static
 
   // Step: 2
   if (!sd0_bot) {
-    prg(sd, iv, tweak, R(0, 0), lambda, outlen);
+    if (params_is_sm4(params)) {
+      sm4_prg(sd, iv, tweak, R(0, 0), lambda, outlen);
+    } else {
+      prg(sd, iv, tweak, R(0, 0), lambda, outlen);
+    }
   }
 
   // Step: 3..4
   for (unsigned int j = 1; j < num_instances; ++j) {
-    prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
+    if (params_is_sm4(params)) {
+      sm4_prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
+    } else {
+      prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
+    }
   }
 
 #if defined(FAEST_SM4_DEBUG)
@@ -133,6 +147,11 @@ static
 void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
                  const faest_paramset_t* params, bavc_t* bavc, uint8_t* c, uint8_t* u,
                  uint8_t** v) {
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] vole_commit called\n");
+  }
+#endif
   const unsigned int lambda       = params->lambda;
   const unsigned int lambda_bytes = lambda / 8;
   const unsigned int ellhat_bytes = (ellhat + 7) / 8;
@@ -184,6 +203,13 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
   }
 #endif
   free(ui);
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    const uint64_t q_hash = sm4_hash64_fnv1a(u, ellhat_bytes);
+    fprintf(stderr, "[SM4_DEBUG] vole_commit_sm4 q_hash=0x%016llx\n",
+            (unsigned long long)q_hash);
+  }
+#endif
 }
 
 #if defined(FAEST_SM4_DEBUG)
@@ -410,6 +436,13 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
   free(qtmp);
   free(sd);
   free(bavc_rec.s);
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    const uint64_t q_hash = sm4_hash64_fnv1a(q[0], ellhat_bytes);
+    fprintf(stderr, "[SM4_DEBUG] vole_reconstruct q_hash=0x%016llx\n",
+            (unsigned long long)q_hash);
+  }
+#endif
   return true;
 }
 

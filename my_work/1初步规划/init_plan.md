@@ -36,14 +36,6 @@ FAEST 是密码学中一种较新的后量子数字签名方案。目前，它�
 
 [ASIACRYPT 2025] VOLE-in-the-Head Signatures from Subfield Bilinear Collisions：将 VOLEitH 范式应用于新的困难问题（子域双线性碰撞），构造了新的签名方案。这证明了 VOLEitH 不仅仅适用于 AES (FAEST)，还具有更广泛的通用性。
 
-## My_Plan
-
-直接把STF的代码，AES改为SM4，SHA3改为SM3，就能写一篇
-
-然后如果想更厉害，可以再优化一下GGM Tree树的结构什么的。这篇论文提出的优化技术是通用的，直接用在 SM-FAEST 上就能立竿见影地减小签名尺寸。
-
-SM-FAEST: A Fully SM-Suite Instantiation of VOLE-in-the-Head Signatures
-
 ### SM4
 
 相同点：都在$FG(2^8)$ 进行运算
@@ -107,3 +99,9 @@ SM3和SHA-2比较像，而SHA-3是可拓展的
 2. **自主可控**：目前的 FAEST 是基于 AES 的，深度依赖 AES 的电路结构。研究 SM4 在此框架下的表现，有助于评估国产算法在 MPCitH（基于多方计算的零知识证明）类协议中的性能边界。
 
 **一句话总结你的工作**：本文基于 VOLE-in-the-Head 协议，设计并实现了面向 SM4 分组密码的零知识证明方案，并构造了抗量子签名算法。
+
+## 存在的问题
+
+- SM4 的zkP部分始终跑不通
+- SM4 性能大概率比不上AES
+- SM3是固定输出哈希函数，而SHAKE基于海绵结构

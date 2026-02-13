@@ -104,11 +104,15 @@ static void sm4_init_affine_masks(void) {
 }
 
 #ifndef FAEST_SM4_DEBUG
-#define FAEST_SM4_DEBUG 1
+#define FAEST_SM4_DEBUG 0
 #endif
 
 #if defined(FAEST_SM4_DEBUG)
+// Global flag to stop after first mismatch
+static bool sm4_debug_first_error_reported = false;
+
 static void sm4_debug_hex(const char* label, const uint8_t* buf, size_t len) {
+  if (sm4_debug_first_error_reported) return;
   fprintf(stderr, "[SM4_DEBUG] %s:", label);
   for (size_t i = 0; i < len; ++i) {
     fprintf(stderr, "%s%02x", (i % 16 == 0) ? " " : "", buf[i]);
@@ -117,6 +121,7 @@ static void sm4_debug_hex(const char* label, const uint8_t* buf, size_t len) {
 }
 
 static void sm4_debug_bits32(const char* label, const uint8_t* buf) {
+  if (sm4_debug_first_error_reported) return;
   char bits[33];
   for (unsigned int bit = 0; bit < 32; ++bit) {
     bits[bit] = ptr_get_bit(buf, bit) ? '1' : '0';
@@ -136,6 +141,7 @@ static void sm4_debug_set_ctx(const char* stage, unsigned int round, unsigned in
 }
 
 static void sm4_hash3_update_dbg(zk_hash_128_3_ctx* ctx, bf128_t v0, bf128_t v1, bf128_t v2) {
+  if (sm4_debug_first_error_reported) return;
   uint8_t b0[BF128_NUM_BYTES], b1[BF128_NUM_BYTES], b2[BF128_NUM_BYTES];
   zk_hash_128_3_update(ctx, v0, v1, v2);
   bf128_store(b0, ctx->h0[0]);
@@ -154,6 +160,7 @@ static void sm4_hash3_update_dbg(zk_hash_128_3_ctx* ctx, bf128_t v0, bf128_t v1,
 }
 
 static void sm4_hash_update_dbg(zk_hash_128_ctx* ctx, bf128_t v) {
+  if (sm4_debug_first_error_reported) return;
   uint8_t b0[BF128_NUM_BYTES], b1[BF128_NUM_BYTES];
   zk_hash_128_update(ctx, v);
   bf128_store(b0, ctx->h0);
@@ -168,6 +175,7 @@ static void sm4_hash_update_dbg(zk_hash_128_ctx* ctx, bf128_t v) {
 }
 
 static void sm4_debug_dump_tags(const char* label, const bf128_t* tags, size_t count) {
+  if (sm4_debug_first_error_reported) return;
   for (size_t i = 0; i < count; ++i) {
     uint8_t buf[BF128_NUM_BYTES];
     bf128_store(buf, tags[i]);
@@ -1036,6 +1044,7 @@ static void sm4_SSS_keyexp_forward_verifier(bf128_t* rk_key, const bf128_t* w_ke
 static void sm4_SSS_keyexp_backward_prover(uint8_t* sbox_inputs, bf128_t* sbox_inputs_tag,
                                            const uint8_t* w_sbox, const bf128_t* w_sbox_tag,
                                            const uint8_t* rk, const bf128_t* rk_tag) {
+  (void)rk_tag; // Unused parameter
   const unsigned int SM4_R = 32;
   
   // 对于每一轮 i (i=0..31):
@@ -1231,6 +1240,7 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
                                            const uint8_t* w, const bf128_t* w_tag,
                                            const uint8_t* rk, const bf128_t* rk_tag,
                                            const faest_paramset_t* params) {
+  (void)params; // Unused parameter
   const unsigned int SM4_R = 32;
   const unsigned int Nbytes = 16;
   const unsigned int Nbits = 128;
@@ -1436,6 +1446,7 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
                                              const bf128_t* rk_key,
                                              bf128_t delta,
                                              const faest_paramset_t* params) {
+  (void)params; // Unused parameter
   const unsigned int SM4_R = 32;
   const unsigned int Nbits = 128;
   
@@ -1816,7 +1827,7 @@ void sm4_pack_d_big_endian(uint8_t* dst, const uint8_t* witness, const uint8_t* 
 }
 
 static inline unsigned int sm4_get_d_bit_be(const uint8_t* d, unsigned int i) {
-  return ptr_get_bit(d, sm4_map_d_index(i));
+  return sm4_ptr_get_bit_be(d, i);
 }
 
 // 辅助函数：将列优先V矩阵转换为行优先并提取w_tag
@@ -1883,12 +1894,24 @@ static bf128_t* column_to_row_major_and_shrink_V_128_sm4(uint8_t** V, unsigned i
   };
 
   for (unsigned int row = 0; row != rows_to_keep; ++row) {
-    const unsigned int row_in_word = row & 31u;
-    const unsigned int src_row = (row & ~31u) | row_perm[row_in_word];
+    const unsigned int src_row = sm4_map_row_to_word_swap(row);
     uint8_t new_row[BF128_NUM_BYTES] = {0};
     for (unsigned int column = 0; column != lambda; ++column) {
       // Match the FAEST row-major bit order used by the base implementation.
       ptr_set_bit(new_row, column, ptr_get_bit(V[column], src_row));
+    }
+    // Apply byte permutation [3,2,0,1] for each 4-byte word
+    uint8_t temp[16];
+    // Word permutation [3,2,0,1] for 4 words
+    memcpy(temp + 0, new_row + 12, 4);  // word 3
+    memcpy(temp + 4, new_row + 8, 4);   // word 2
+    memcpy(temp + 8, new_row + 0, 4);   // word 0
+    memcpy(temp + 12, new_row + 4, 4);  // word 1
+    memcpy(new_row, temp, 16);
+    // Byte permutation [2,3,0,1] within each 4-byte word
+    for (unsigned int i = 0; i < 16; i += 4) {
+      uint8_t btemp[4] = {new_row[i+2], new_row[i+3], new_row[i+0], new_row[i+1]};
+      memcpy(new_row + i, btemp, 4);
     }
     w_tag[row] = bf128_load(new_row);
 
@@ -1964,6 +1987,7 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
                     const uint8_t* chall_2, const faest_paramset_t* params) {
 #if defined(FAEST_SM4_DEBUG)
   sm4_selftest_vector_once();
+  sm4_debug_first_error_reported = false;  // Reset error flag
 #endif
   const unsigned int ell = params->l;
   const unsigned int lambda = 128;  // SM4_128固定为128位
@@ -1971,7 +1995,10 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   const size_t chall2_len = 3u * (lambda / 8u) + 8u;
 
   // ::1-5 将V转换为w_tag
-  bf128_t* w_tag = column_to_row_major_and_shrink_V_128(V, ell, "prover V->w_tag");
+  bf128_t* w_tag = column_to_row_major_and_shrink_V_128_sm4(V, ell, lambda, ell_hat, "prover V->w_tag");
+
+  // Stage check: witness generation complete
+  assert(w_tag != NULL);
 
 #if defined(FAEST_SM4_DEBUG)
   // cache prover view for verifier-side comparison inside same process (tests)
@@ -2029,6 +2056,8 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   // ::13 生成SM4约束
   sm4_SSS_constraints_prover(&hasher, w, w_tag, owf_in, owf_out, params);
 
+  // Stage check: constraints generation complete
+
   // ::14 最终化哈希
   zk_hash_128_3_finalize(a0_tilde, a1_tilde, a2_tilde, &hasher, bf_v_star_0,
                          bf128_add(bf_u_star_0, bf_v_star_1), bf_u_star_1);
@@ -2039,6 +2068,8 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   sm4_debug_hex("prover a2_tilde", a2_tilde, lambda / 8);
 #endif
 
+  // Stage check: final comparison preparation complete
+
   free(w_tag);
 }
 
@@ -2048,6 +2079,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                       const faest_paramset_t* params) {
 #if defined(FAEST_SM4_DEBUG)
   sm4_selftest_vector_once();
+  sm4_debug_first_error_reported = false;  // Reset error flag
 #endif
   const unsigned int ell = params->l;
   const unsigned int lambda = 128;
@@ -2064,7 +2096,10 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 #endif
 
   // ::2-6 将Q转换为q_key
-  bf128_t* q_key = column_to_row_major_and_shrink_V_128(Q, ell, "verifier Q->q_key");
+  bf128_t* q_key = column_to_row_major_and_shrink_V_128_sm4(Q, ell, lambda, ell_hat, "verifier Q->q_key");
+
+  // Stage check: witness reconstruction complete
+  assert(q_key != NULL);
 
 #if defined(FAEST_SM4_DEBUG)
   if (sm4_dbg_last_w_tag && sm4_dbg_last_w_taglen == ell + 2 * lambda) {
@@ -2086,7 +2121,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
         }
       }
       fprintf(stderr,
-              "[SM4_DEBUG] row_perm mode=%u match_zero=%zu match_delta=%zu total=%u\n",
+              "[SM4_DEBUG] row_perm mode=%u match_zero=%zu match_delta=%zu total=%zu\n",
               mode, match_zero, match_delta, sm4_dbg_last_w_taglen);
     }
 
@@ -2307,7 +2342,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
         // Scan for a 128-bit window with byte-permutation and bit-order variants.
         {
-          const size_t buf_bits = sm4_dbg_last_witness_len * 8;
+          const size_t buf_bits_inner = sm4_dbg_last_witness_len * 8;
           const unsigned int off_step = 32;  // keep word alignment
           unsigned int found = 0;
           size_t found_off = 0;
@@ -2323,13 +2358,13 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                 if (c == a || c == b) {
                   continue;
                 }
-                for (unsigned int d = 0; d < 4 && !found; ++d) {
-                  if (d == a || d == b || d == c) {
+                for (unsigned int d_perm = 0; d_perm < 4 && !found; ++d_perm) {
+                  if (d_perm == a || d_perm == b || d_perm == c) {
                     continue;
                   }
-                  uint8_t perm[4] = {(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d};
+                  uint8_t perm[4] = {(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d_perm};
                   for (unsigned int msb = 0; msb < 2 && !found; ++msb) {
-                    for (size_t off = 0; off + 128 <= buf_bits; off += off_step) {
+                    for (size_t off = 0; off + 128 <= buf_bits_inner; off += off_step) {
                       unsigned int match = 1;
                       for (unsigned int j = 0; j < 128; ++j) {
                         const unsigned int word_base = (unsigned int)off & ~31u;
@@ -2377,7 +2412,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
         // Scan for a 128-bit window with word+byte permutations and bit-order variants.
         {
-          const size_t buf_bits = sm4_dbg_last_witness_len * 8;
+          const size_t buf_bits_outer = sm4_dbg_last_witness_len * 8;
           const unsigned int off_step = 32;  // keep word alignment
           unsigned int found = 0;
           size_t found_off = 0;
@@ -2408,14 +2443,14 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                         if (c == a || c == b) {
                           continue;
                         }
-                        for (unsigned int d = 0; d < 4 && !found; ++d) {
-                          if (d == a || d == b || d == c) {
+                        for (unsigned int d_byte = 0; d_byte < 4 && !found; ++d_byte) {
+                          if (d_byte == a || d_byte == b || d_byte == c) {
                             continue;
                           }
                           uint8_t byte_perm[4] =
-                              {(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d};
+                              {(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d_byte};
                           for (unsigned int msb = 0; msb < 2 && !found; ++msb) {
-                            for (size_t off = 0; off + 128 <= buf_bits; off += off_step) {
+                            for (size_t off = 0; off + 128 <= buf_bits_outer; off += off_step) {
                               unsigned int match = 1;
                               for (unsigned int j = 0; j < 128; ++j) {
                                 const unsigned int word_idx = (j >> 5) & 3u;
@@ -2469,7 +2504,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
         // Scan for strided bitstreams (e.g., interleaved layouts).
         {
-          const size_t buf_bits = sm4_dbg_last_witness_len * 8;
+          const size_t buf_bits_stride = sm4_dbg_last_witness_len * 8;
           const unsigned int strides[] = {2, 4, 8, 16, 32};
           unsigned int found = 0;
           unsigned int found_stride = 0;
@@ -2483,7 +2518,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                 unsigned int match = 1;
                 for (unsigned int j = 0; j < 128; ++j) {
                   const unsigned int idx = off + j * stride;
-                  if (idx >= buf_bits) {
+                  if (idx >= buf_bits_stride) {
                     match = 0;
                     break;
                   }
@@ -2530,14 +2565,14 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
               if (c == a || c == b) {
                 continue;
               }
-              for (unsigned int d = 0; d < 4; ++d) {
-                if (d == a || d == b || d == c) {
+              for (unsigned int d_perm3 = 0; d_perm3 < 4; ++d_perm3) {
+                if (d_perm3 == a || d_perm3 == b || d_perm3 == c) {
                   continue;
                 }
                 perm[0] = (uint8_t)a;
                 perm[1] = (uint8_t)b;
                 perm[2] = (uint8_t)c;
-                perm[3] = (uint8_t)d;
+                perm[3] = (uint8_t)d_perm3;
                 for (unsigned int msb = 0; msb < 2; ++msb) {
                   unsigned int matches = 0;
                   for (unsigned int row = 0; row < 128; ++row) {
@@ -2606,14 +2641,14 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
                         if (c == a || c == b) {
                           continue;
                         }
-                        for (unsigned int d = 0; d < 4; ++d) {
-                          if (d == a || d == b || d == c) {
+                        for (unsigned int d_byte2 = 0; d_byte2 < 4; ++d_byte2) {
+                          if (d_byte2 == a || d_byte2 == b || d_byte2 == c) {
                             continue;
                           }
                           byte_perm[0] = (uint8_t)a;
                           byte_perm[1] = (uint8_t)b;
                           byte_perm[2] = (uint8_t)c;
-                          byte_perm[3] = (uint8_t)d;
+                          byte_perm[3] = (uint8_t)d_byte2;
                           for (unsigned int msb = 0; msb < 2; ++msb) {
                             unsigned int matches = 0;
                             for (unsigned int row = 0; row < 128; ++row) {
@@ -3000,6 +3035,23 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
     if (memcmp(a, b, sizeof(a)) != 0) {
       sm4_debug_hex("prover q_star", a, BF128_NUM_BYTES);
       sm4_debug_hex("verifier q_star", b, BF128_NUM_BYTES);
+
+      /* extra diagnostics: dump delta and the two sum-polys used to form q_star */
+      uint8_t dbg_buf[BF128_NUM_BYTES];
+      bf128_store(dbg_buf, bf_delta);
+      sm4_debug_hex("verifier bf_delta", dbg_buf, BF128_NUM_BYTES);
+      bf128_store(dbg_buf, q_star_0);
+      sm4_debug_hex("verifier q_star_0", dbg_buf, BF128_NUM_BYTES);
+      bf128_store(dbg_buf, q_star_1);
+      sm4_debug_hex("verifier q_star_1", dbg_buf, BF128_NUM_BYTES);
+
+      /* dump prover-side v_star components for comparison */
+      bf128_store(dbg_buf, sm4_dbg_last_v_star0);
+      sm4_debug_hex("prover v_star0", dbg_buf, BF128_NUM_BYTES);
+      bf128_store(dbg_buf, sm4_dbg_last_v_star1);
+      sm4_debug_hex("prover v_star1", dbg_buf, BF128_NUM_BYTES);
+
+      sm4_debug_first_error_reported = true;
     }
   }
 #endif
@@ -3068,6 +3120,8 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   // ::12 验证SM4约束
   sm4_SSS_constraints_verifier(&b_ctx, q_key, owf_in, owf_out, bf_delta, params);
 
+  // Stage check: constraints verification complete
+
   free(q_key);
 
   // ::13-14 最终化哈希
@@ -3078,6 +3132,8 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   bf128_store(dbg_q_star, q_star);
   sm4_debug_hex("verifier q_star", dbg_q_star, lambda / 8);
 #endif
+
+  // Stage check: challenge and hash finalization complete
 
   // ::15-16 计算a0_tilde
   bf128_t tmp1 = bf128_mul(bf128_load(a1_tilde), bf_delta);
@@ -3091,4 +3147,6 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   sm4_debug_hex("verifier q_tilde", q_tilde, lambda / 8);
   sm4_debug_hex("verifier a0_tilde", a0_tilde, lambda / 8);
 #endif
+
+  // Stage check: final comparison preparation complete
 }

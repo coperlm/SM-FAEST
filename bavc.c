@@ -10,10 +10,14 @@
 #include "random_oracle.h"
 #include "compat.h"
 #include "aes.h"
+#include "sm4.h"
 #include "instances.h"
 #include "universal_hashing.h"
 
 #include <assert.h>
+static inline bool params_is_sm4(const faest_paramset_t* params) {
+  return params->R == 32;
+}
 #include <string.h>
 #include <stdio.h>
 
@@ -62,11 +66,16 @@ static uint8_t* generate_seeds(const uint8_t* root_seed, const uint8_t* iv,
 
 // FAEST.LeafCommit
 static void faest_leaf_commit(uint8_t* sd, uint8_t* com, const uint8_t* key, const uint8_t* iv,
-                              uint32_t tweak, const uint8_t* uhash, unsigned int lambda) {
+                              uint32_t tweak, const uint8_t* uhash, const faest_paramset_t* params) {
+  const unsigned int lambda = params->lambda;
   const unsigned int lambda_bytes = lambda / 8;
 
   uint8_t buffer[MAX_LAMBDA_BYTES * 4];
-  prg_4_lambda(key, iv, tweak, buffer, lambda);
+  if (params_is_sm4(params)) {
+    sm4_prg_4_lambda(key, iv, tweak, buffer, lambda);
+  } else {
+    prg_4_lambda(key, iv, tweak, buffer, lambda);
+  }
   leaf_hash(com, uhash, buffer, lambda);
   memcpy(sd, buffer, lambda_bytes);
 }
@@ -86,7 +95,7 @@ void leaf_commit(uint8_t* sd, uint8_t* com, const uint8_t* key, const uint8_t* i
   if (faest_is_em(params)) {
     faest_em_leaf_commit(sd, com, key, iv, tweak, params->lambda);
   } else {
-    faest_leaf_commit(sd, com, key, iv, tweak, uhash, params->lambda);
+    faest_leaf_commit(sd, com, key, iv, tweak, uhash, params);
   }
 }
 #endif
@@ -149,7 +158,7 @@ static void bavc_commit_faest(bavc_t* bavc, const uint8_t* root_key, const uint8
     for (unsigned int j = 0; j < N_i; ++j, ++offset) {
       const unsigned int alpha = pos_in_tree(i, j, params);
       faest_leaf_commit(bavc->sd + offset * lambda_bytes, bavc->com + offset * com_size,
-                        NODE(nodes, alpha, lambda_bytes), iv, i + L - 1, uhash, lambda);
+                        NODE(nodes, alpha, lambda_bytes), iv, i + L - 1, uhash, params);
       H1_update(&h1_ctx, bavc->com + offset * com_size, com_size);
     }
 
@@ -163,6 +172,12 @@ static void bavc_commit_faest(bavc_t* bavc, const uint8_t* root_key, const uint8
 
   // Step 12
   H1_final(&h1_com_ctx, bavc->h, lambda_bytes * 2);
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] bavc_commit_faest h=0x%016llx\n",
+            (unsigned long long)sm4_hash64_fnv1a(bavc->h, lambda_bytes * 2));
+  }
+#endif
 }
 
 // BAVC.Commit for FAEST-EM
@@ -404,7 +419,7 @@ static bool bavc_reconstruct_faest(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
       } else {
         uint8_t com[3 * MAX_LAMBDA_BYTES];
         faest_leaf_commit(bavc_rec->s + offset * lambda_bytes, com, keys + alpha * lambda_bytes, iv,
-                          i + L - 1, uhash, lambda);
+                          i + L - 1, uhash, params);
         ++offset;
         H1_update(&h1_ctx, com, com_size);
       }
@@ -417,6 +432,12 @@ static bool bavc_reconstruct_faest(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
   H0_clear(&uhash_ctx);
 
   H1_final(&h1_com_ctx, bavc_rec->h, lambda_bytes * 2);
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_faest h=0x%016llx\n",
+            (unsigned long long)sm4_hash64_fnv1a(bavc_rec->h, lambda_bytes * 2));
+  }
+#endif
 
   free(keys);
   free(s);

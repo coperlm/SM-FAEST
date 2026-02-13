@@ -15,7 +15,7 @@
 #include <stdio.h>
 
 #ifndef FAEST_SM4_DEBUG
-#define FAEST_SM4_DEBUG 1
+#define FAEST_SM4_DEBUG 0
 #endif
 
 // ============ SM4 S-box (国密标准 GM/T 0002-2012) ============
@@ -142,10 +142,8 @@ void sm4_increment_iv(uint8_t* iv)
 static inline void sm4_increment_iv(uint8_t* iv)
 #endif
 {
-  uint32_t iv0;
-  memcpy(&iv0, iv, sizeof(uint32_t));
-  iv0 = htole32(le32toh(iv0) + 1);
-  memcpy(iv, &iv0, sizeof(uint32_t));
+  uint32_t* counter = (uint32_t*)(iv + 12);
+  *counter = htole32(le32toh(*counter) + 1);
 }
 
 // ============ PRG 实现（SM4-CTR 模式）============
