@@ -15,12 +15,6 @@ const char* faest_get_param_name(faest_paramid_t paramid) {
     return "PARAMETER_SET_INVALID";
   case FAEST_128S:
     return "FAEST_128S";
-  case FAEST_128F:
-    return "FAEST_128F";
-  case FAEST_EM_128S:
-    return "FAEST_EM_128S";
-  case FAEST_EM_128F:
-    return "FAEST_EM_128F";
   default:
     return "PARAMETER_SET_MAX_INDEX";
   }
@@ -55,9 +49,6 @@ const char* faest_get_param_name(faest_paramid_t paramid) {
   }
 
 #define FAEST_128S_PARAMS PARAMS(FAEST_128S)
-#define FAEST_128F_PARAMS PARAMS(FAEST_128F)
-#define FAEST_EM_128S_PARAMS PARAMS(FAEST_EM_128S)
-#define FAEST_EM_128F_PARAMS PARAMS(FAEST_EM_128F)
 
 #define CASE_PARAM(P)                                                                              \
   case P: {                                                                                        \
@@ -68,9 +59,6 @@ const char* faest_get_param_name(faest_paramid_t paramid) {
 const faest_paramset_t* faest_get_paramset(faest_paramid_t paramid) {
   switch (paramid) {
     CASE_PARAM(FAEST_128S)
-    CASE_PARAM(FAEST_128F)
-    CASE_PARAM(FAEST_EM_128S)
-    CASE_PARAM(FAEST_EM_128F)
   default:
     return NULL;
   }
