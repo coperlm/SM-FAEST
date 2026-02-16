@@ -1,0 +1,218 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+// SM4 S-box from GM/T 0002-2012
+static const uint8_t SM4_SBOX[256] = {
+    0xd6, 0x90, 0xe9, 0xfe, 0xcc, 0xe1, 0x3d, 0xb7, 0x16, 0xb6, 0x14, 0xc2, 0x28, 0xfb, 0x2c, 0x05,
+    0x2b, 0x67, 0x9a, 0x76, 0x2a, 0xbe, 0x04, 0xc3, 0xaa, 0x44, 0x13, 0x26, 0x49, 0x86, 0x06, 0x99,
+    0x9c, 0x42, 0x50, 0xf4, 0x91, 0xef, 0x98, 0x7a, 0x33, 0x54, 0x0b, 0x43, 0xed, 0xcf, 0xac, 0x62,
+    0xe4, 0xb3, 0x1c, 0xa9, 0xc9, 0x08, 0xe8, 0x95, 0x80, 0xdf, 0x94, 0xfa, 0x75, 0x8f, 0x3f, 0xa6,
+    0x47, 0x07, 0xa7, 0xfc, 0xf3, 0x73, 0x17, 0xba, 0x83, 0x59, 0x3c, 0x19, 0xe6, 0x85, 0x4f, 0xa8,
+    0x68, 0x6b, 0x81, 0xb2, 0x71, 0x64, 0xda, 0x8b, 0xf8, 0xeb, 0x0f, 0x4b, 0x70, 0x56, 0x9d, 0x35,
+    0x1e, 0x24, 0x0e, 0x5e, 0x63, 0x58, 0xd1, 0xa2, 0x25, 0x22, 0x7c, 0x3b, 0x01, 0x21, 0x78, 0x87,
+    0xd4, 0x00, 0x46, 0x57, 0x9f, 0xd3, 0x27, 0x52, 0x4c, 0x36, 0x02, 0xe7, 0xa0, 0xc4, 0xc8, 0x9e,
+    0xea, 0xbf, 0x8a, 0xd2, 0x40, 0xc7, 0x38, 0xb5, 0xa3, 0xf7, 0xf2, 0xce, 0xf9, 0x61, 0x15, 0xa1,
+    0xe0, 0xae, 0x5d, 0xa4, 0x9b, 0x34, 0x1a, 0x55, 0xad, 0x93, 0x32, 0x30, 0xf5, 0x8c, 0xb1, 0xe3,
+    0x1d, 0xf6, 0xe2, 0x2e, 0x82, 0x66, 0xca, 0x60, 0xc0, 0x29, 0x23, 0xab, 0x0d, 0x53, 0x4e, 0x6f,
+    0xd5, 0xdb, 0x37, 0x45, 0xde, 0xfd, 0x8e, 0x2f, 0x03, 0xff, 0x6a, 0x72, 0x6d, 0x6c, 0x5b, 0x51,
+    0x8d, 0x1b, 0xaf, 0x92, 0xbb, 0xdd, 0xbc, 0x7f, 0x11, 0xd9, 0x5c, 0x41, 0x1f, 0x10, 0x5a, 0xd8,
+    0x0a, 0xc1, 0x31, 0x88, 0xa5, 0xcd, 0x7b, 0xbd, 0x2d, 0x74, 0xd0, 0x12, 0xb8, 0xe5, 0xb4, 0xb0,
+    0x89, 0x69, 0x97, 0x4a, 0x0c, 0x96, 0x77, 0x7e, 0x65, 0xb9, 0xf1, 0x09, 0xc5, 0x6e, 0xc6, 0x84,
+    0x18, 0xf0, 0x7d, 0xec, 0x3a, 0xdc, 0x4d, 0x20, 0x79, 0xee, 0x5f, 0x3e, 0xd7, 0xcb, 0x39, 0x48
+};
+
+// SM4 系统参数 FK
+static const uint32_t FK[4] = {
+    0xa3b1bac6, 0x56aa3350, 0x677d9197, 0xb27022dc
+};
+
+// SM4 固定参数 CK
+static const uint32_t CK[32] = {
+    0x00070e15, 0x1c232a31, 0x383f464d, 0x545b6269,
+    0x70777e85, 0x8c939aa1, 0xa8afb6bd, 0xc4cbd2d9,
+    0xe0e7eef5, 0xfc030a11, 0x181f262d, 0x343b4249,
+    0x50575e65, 0x6c737a81, 0x888f969d, 0xa4abb2b9,
+    0xc0c7ced5, 0xdce3eaf1, 0xf8ff060d, 0x141b2229,
+    0x30373e45, 0x4c535a61, 0x686f767d, 0x848b9299,
+    0xa0a7aeb5, 0xbcc3cad1, 0xd8dfe6ed, 0xf4fb0209,
+    0x10171e25, 0x2c333a41, 0x484f565d, 0x646b7279
+};
+
+// 辅助函数
+static inline uint32_t rotl32(uint32_t x, unsigned int n) {
+    return (x << n) | (x >> (32 - n));
+}
+
+static inline uint32_t bytes_to_uint32(const uint8_t* bytes) {
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | ((uint32_t)bytes[3]);
+}
+
+static inline void uint32_to_bytes(uint32_t val, uint8_t* bytes) {
+    bytes[0] = (val >> 24) & 0xFF;
+    bytes[1] = (val >> 16) & 0xFF;
+    bytes[2] = (val >> 8) & 0xFF;
+    bytes[3] = val & 0xFF;
+}
+
+// SM4 S-box 查找
+uint8_t sm4_sbox(uint8_t in) {
+    return SM4_SBOX[in];
+}
+
+// 合成置换 τ
+uint32_t sm4_tau(uint32_t a) {
+    uint8_t bytes[4];
+    uint32_to_bytes(a, bytes);
+
+    bytes[0] = sm4_sbox(bytes[0]);
+    bytes[1] = sm4_sbox(bytes[1]);
+    bytes[2] = sm4_sbox(bytes[2]);
+    bytes[3] = sm4_sbox(bytes[3]);
+
+    return bytes_to_uint32(bytes);
+}
+
+// 线性变换 L (用于加密)
+uint32_t sm4_linear_l(uint32_t b) {
+    return b ^ rotl32(b, 2) ^ rotl32(b, 10) ^ rotl32(b, 18) ^ rotl32(b, 24);
+}
+
+// 线性变换 L' (用于密钥扩展)
+uint32_t sm4_linear_l_prime(uint32_t b) {
+    return b ^ rotl32(b, 13) ^ rotl32(b, 23);
+}
+
+// T 变换 (加密用)
+static inline uint32_t sm4_t(uint32_t x) {
+    return sm4_linear_l(sm4_tau(x));
+}
+
+// T' 变换 (密钥扩展用)
+static inline uint32_t sm4_t_prime(uint32_t x) {
+    return sm4_linear_l_prime(sm4_tau(x));
+}
+
+// SM4 轮密钥结构
+typedef struct {
+    uint32_t round_keys[32];
+} sm4_round_keys_t;
+
+// 密钥扩展算法 (加密密钥)
+void sm4_init_round_keys(sm4_round_keys_t* rk, const uint8_t* key) {
+    uint32_t K[36]; // K[0..3] 中间密钥, K[4..35] = rk[0..31]
+
+    // MK 转换为 K[0..3]
+    for (int i = 0; i < 4; i++) {
+        K[i] = bytes_to_uint32(key + 4 * i) ^ FK[i];
+    }
+
+    // 生成32轮轮密钥
+    for (int i = 0; i < 32; i++) {
+        K[i + 4] = K[i] ^ sm4_t_prime(K[i + 1] ^ K[i + 2] ^ K[i + 3] ^ CK[i]);
+        rk->round_keys[i] = K[i + 4];
+    }
+}
+
+// 生成解密轮密钥 (逆序)
+void sm4_init_decrypt_keys(sm4_round_keys_t* rk, const uint8_t* key) {
+    sm4_round_keys_t encrypt_keys;
+    sm4_init_round_keys(&encrypt_keys, key);
+
+    // 解密轮密钥是加密轮密钥的逆序
+    for (int i = 0; i < 32; i++) {
+        rk->round_keys[i] = encrypt_keys.round_keys[31 - i];
+    }
+}
+
+// SM4 加密算法
+void sm4_encrypt_block(const sm4_round_keys_t* rk, const uint8_t* plaintext,
+                       uint8_t* ciphertext) {
+    uint32_t X[36]; // X[0..3] 输入, X[4..35] 中间状态
+
+    // 加载明文
+    for (int i = 0; i < 4; i++) {
+        X[i] = bytes_to_uint32(plaintext + 4 * i);
+    }
+
+    // 32轮迭代: X[i+4] = X[i] ⊕ T(X[i+1] ⊕ X[i+2] ⊕ X[i+3] ⊕ rk[i])
+    for (int i = 0; i < 32; i++) {
+        X[i + 4] = X[i] ^ sm4_t(X[i + 1] ^ X[i + 2] ^ X[i + 3] ^ rk->round_keys[i]);
+    }
+
+    // 反序变换输出: (X[35], X[34], X[33], X[32])
+    for (int i = 0; i < 4; i++) {
+        uint32_to_bytes(X[35 - i], ciphertext + 4 * i);
+    }
+}
+
+// 打印十六进制数据
+void print_hex(const char* label, const uint8_t* data, size_t len) {
+    printf("%s: ", label);
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+int main() {
+    // 测试向量来自 GM/T 0002-2012 附录A
+    const uint8_t key[16] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10
+    };
+
+    const uint8_t plaintext[16] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10
+    };
+
+    // 预期密文 (来自标准)
+    const uint8_t expected_ciphertext[16] = {
+        0x68, 0x1e, 0xdf, 0x34, 0xd2, 0x06, 0x96, 0x5e,
+        0x86, 0xb3, 0xe9, 0x4f, 0x53, 0x6e, 0x42, 0x46
+    };
+
+    uint8_t ciphertext[16];
+    uint8_t decrypted[16];
+
+    printf("SM4 加密测试\n");
+    printf("============\n");
+
+    print_hex("密钥", key, 16);
+    print_hex("明文", plaintext, 16);
+    print_hex("预期密文", expected_ciphertext, 16);
+
+    // 初始化轮密钥
+    sm4_round_keys_t encrypt_keys, decrypt_keys;
+    sm4_init_round_keys(&encrypt_keys, key);
+    sm4_init_decrypt_keys(&decrypt_keys, key);
+
+    // 加密
+    sm4_encrypt_block(&encrypt_keys, plaintext, ciphertext);
+    print_hex("实际密文", ciphertext, 16);
+
+    // 验证加密结果
+    if (memcmp(ciphertext, expected_ciphertext, 16) == 0) {
+        printf("✅ 加密测试通过！\n");
+    } else {
+        printf("❌ 加密测试失败！\n");
+        return 1;
+    }
+
+    // 解密测试 (使用解密密钥)
+    sm4_encrypt_block(&decrypt_keys, ciphertext, decrypted);
+    print_hex("解密结果", decrypted, 16);
+
+    if (memcmp(decrypted, plaintext, 16) == 0) {
+        printf("✅ 解密测试通过！\n");
+    } else {
+        printf("❌ 解密测试失败！\n");
+        return 1;
+    }
+
+    printf("\n测试完成！SM4实现正确。\n");
+    return 0;
+}
