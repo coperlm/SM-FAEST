@@ -53,6 +53,7 @@
 
 static_assert(FAEST_SSS_LAMBDA == FAEST_@SSS@S_LAMBDA, "Invalid parameters");
 static_assert(FAEST_SSS_R == FAEST_@SSS@S_R, "Invalid parameters");
+static_assert(FAEST_SSS_LAMBDA == 128, "This file supports only AES-128 (FAEST_SSS_LAMBDA==128)");
 // clang-format on
 
 /* pad sizes to multiples of some value; assumes that a is a power of 2 */
@@ -872,10 +873,6 @@ static void aes_SSS_expkey_constraints_prover(zk_hash_SSS_3_ctx* hasher, uint8_t
           bfSSS_byte_combine_sq(w_flat_tag + (32 * j + 8 * r)); // lifted output tag sq
     }
 
-#if FAEST_SSS_LAMBDA == 256
-    // ::16 used only for AES-256
-    do_rot_word = !do_rot_word;
-#endif
     // ::17
     for (unsigned int r = 0; r < 4; r++) {
       // ::18-19
@@ -888,11 +885,7 @@ static void aes_SSS_expkey_constraints_prover(zk_hash_SSS_3_ctx* hasher, uint8_t
                                                          bfSSS_mul(k_hat_tag[r], w_hat_sq[r])),
                                                w_hat_tag[r]));
     }
-#if FAEST_SSS_LAMBDA == 192
-    iwd += 192;
-#else
     iwd += 128;
-#endif
   }
   faest_aligned_free(w_flat_tag);
   free(w_flat);
@@ -939,10 +932,6 @@ static void aes_SSS_expkey_constraints_verifier(zk_hash_SSS_ctx* hasher, bfSSS_t
       w_hat_key_sq[r] =
           bfSSS_byte_combine_sq(w_flat_key + (32 * j + 8 * r)); // lifted output tag sq
     }
-#if FAEST_SSS_LAMBDA == 256
-    // ::16 used only for AES-256
-    do_rot_word = !do_rot_word;
-#endif
     // ::17-20
     for (unsigned int r = 0; r < 4; r++) {
       // also raise degree
@@ -953,11 +942,7 @@ static void aes_SSS_expkey_constraints_verifier(zk_hash_SSS_ctx* hasher, bfSSS_t
                          bfSSS_mul(delta, bfSSS_add(bfSSS_mul(k_hat_key[r], w_hat_key_sq[r]),
                                                     bfSSS_mul(delta, w_hat_key[r]))));
     }
-#if FAEST_SSS_LAMBDA == 192
-    iwd += 192;
-#else
     iwd += 128;
-#endif
   }
   faest_aligned_free(w_flat_key);
 }

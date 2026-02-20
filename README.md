@@ -22,12 +22,6 @@ For tests:
 * `boost` (unit test framework)
 * `NTL`
 
-On Debian-based Linux distributions:
-```sh
-apt install meson ninja-build # for build dependencies
-apt install libboost-test-dev libntl-dev # for test dependencies
-```
-
 On Arch-based Linux distributions:
 ```sh
 pacman -S meson ninja        # for build dependencies
