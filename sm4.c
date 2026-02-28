@@ -208,6 +208,31 @@ static inline uint8_t sm4_inverse_affine(uint8_t sbox_out) {
   return (uint8_t)(sm4_rotl8(y, 7) ^ sm4_rotl8(y, 5) ^ sm4_rotl8(y, 1));
 }
 
+/**
+ * SM4 GF(2^4) 逆范数（仅用于 ZK 约束见证）
+ * 计算 x^238 = x^(-17) in SM4 GF(2^8)，并提取位 (0,2,4,5) 得到4位值
+ * 这是 GF(2^4)/GF(2) 的多项式基坐标表示，对应基 {1, β, β², β³} (β=0x0c)
+ */
+uint8_t sm4_invnorm(uint8_t x) {
+  // 238 = 0b11101110: compute x^238 using square-and-multiply in SM4 GF(2^8)
+  uint8_t y = bf8_square_sm4(x);        // x^2
+  x         = bf8_square_sm4(y);        // x^4
+  y         = bf8_mul_sm4(x, y);        // x^6
+  x         = bf8_square_sm4(x);        // x^8
+  y         = bf8_mul_sm4(x, y);        // x^14
+  x         = bf8_square_sm4(x);        // x^16
+  x         = bf8_square_sm4(x);        // x^32
+  y         = bf8_mul_sm4(x, y);        // x^46
+  x         = bf8_square_sm4(x);        // x^64
+  y         = bf8_mul_sm4(x, y);        // x^110
+  x         = bf8_square_sm4(x);        // x^128
+  x         = bf8_mul_sm4(x, y);        // x^238
+  // Extract bits at positions (0, 2, 4, 5) → output bits (0, 1, 2, 3)
+  // Basis: bit0→coeff of 1, bit1→coeff of β=0x0c, bit2→coeff of β²=0x50, bit3→coeff of β³=0x2a
+  return set_bit(get_bit(x, 0), 0) ^ set_bit(get_bit(x, 2), 1) ^
+         set_bit(get_bit(x, 4), 2) ^ set_bit(get_bit(x, 5), 3);
+}
+
 // ============ 扩展见证（ZK 证明用）============
 void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
                         const faest_paramset_t* params) {
@@ -279,16 +304,16 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
     seg_start = (size_t)(w - w_out);
 #endif
 
-    // 记录每轮 τ(X) 的逆范数（4 字节），总计 32*4 = 128 字节
+    // 记录每轮 S-box 输入的逆范数（4 字节），总计 32*4 = 128 字节
+    // 注意：invnorm 必须应用于 S-box 输入（类似 AES 在 sub_bytes 之前保存），而不是输出
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
-      // X = K[i+1] ⊕ K[i+2] ⊕ K[i+3] ⊕ CK[i]
+      // X = K[i+1] ⊕ K[i+2] ⊕ K[i+3] ⊕ CK[i] = S-box 输入
       uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
-      uint32_t tau_x = sm4_tau(x);  // τ(X) = S-box 应用后的结果
 
-      uint8_t tau_bytes[4];
-      sm4_uint32_to_bytes(tau_x, tau_bytes);
+      uint8_t x_bytes[4];
+      sm4_uint32_to_bytes(x, x_bytes);  // S-box 输入（不是输出）
       for (unsigned int j = 0; j < 4; ++j) {
-        *w++ = sm4_inverse_affine(tau_bytes[j]);
+        *w++ = sm4_invnorm(x_bytes[j]);  // invnorm of S-box INPUT
       }
     }
 #if defined(FAEST_SM4_DEBUG)
@@ -322,14 +347,15 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   // 32 轮迭代，记录中间状态（从 round=1 开始，类似 AES）
   for (unsigned int round = 1; round < params->R; round++) {
     if (round % 2 == 1) {
-      // 奇数轮：记录 S-box 输出（4 字节）以及逆元（4 字节）
+      // 奇数轮：记录 S-box 输出（4 字节）以及 S-box 输入的逆范数（4 字节）
+      // 注意：invnorm 应用于 S-box 输入 temp_bytes[j]，而不是 S-box 输出
       uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
       uint8_t temp_bytes[4];
       sm4_uint32_to_bytes(temp, temp_bytes);
       for (int j = 0; j < 4; j++) {
         uint8_t sbox_out = sm4_sbox(temp_bytes[j]);
         *w++ = sbox_out;
-        *w++ = sm4_inverse_affine(sbox_out);
+        *w++ = sm4_invnorm(temp_bytes[j]);  // invnorm of S-box INPUT (not output)
       }
     }
     
@@ -344,14 +370,31 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
     state[3] = new_word;
     
     if (round % 2 == 0) {
-      // 偶数轮：记录完整状态
+      // 偶数轮（round=2,4,...,30）：记录完整状态（16字节）+ S-box 输入的逆范数（4字节）
       for (int j = 0; j < 4; j++) {
         sm4_uint32_to_bytes(state[j], w);
         w += 4;
       }
+      // 写入偶数轮 S-box 输入（temp_bytes）的逆范数，用于 ZK 约束
+      uint8_t temp_bytes_even[4];
+      sm4_uint32_to_bytes(temp, temp_bytes_even);
+      for (int j = 0; j < 4; j++) {
+        *w++ = sm4_invnorm(temp_bytes_even[j]);
+      }
     }
   }
-  
+
+  // 最后的偶数轮 round=32（最后一对，状态是公开输出，只需记录 invnorm）
+  // temp32 = state[1] ^ state[2] ^ state[3] ^ rk[31]
+  {
+    uint32_t temp32 = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[params->R - 1];
+    uint8_t temp32_bytes[4];
+    sm4_uint32_to_bytes(temp32, temp32_bytes);
+    for (int j = 0; j < 4; j++) {
+      *w++ = sm4_invnorm(temp32_bytes[j]);
+    }
+  }
+
   // 最后一轮不提交，因此不记录
   
   assert(w - w_out == params->l / 8);
