@@ -23,8 +23,8 @@ static inline bool params_is_sm4(const faest_paramset_t* params) {
   return params->R == 32;
 }
 
-#if defined(FAEST_SM4_DEBUG)
-static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
+/* debugging helpers always available now */
+uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
   uint64_t h = 1469598103934665603ULL;
   for (size_t i = 0; i < len; ++i) {
     h ^= (uint64_t)data[i];
@@ -33,14 +33,13 @@ static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
   return h;
 }
 
-static void sm4_dbg_hex_bytes(const char* label, const uint8_t* data, size_t len) {
+void sm4_dbg_hex_bytes(const char* label, const uint8_t* data, size_t len) {
   fprintf(stderr, "%s (%zu): ", label, len);
   for (size_t i = 0; i < len; ++i) {
     fprintf(stderr, "%02x", data[i]);
   }
   fprintf(stderr, "\n");
 }
-#endif
 
 static inline uint16_t sm4_bitreverse_k(uint16_t v, unsigned int k) {
   uint16_t r = 0;
@@ -56,6 +55,12 @@ static
     unsigned int
     convert_to_vole(const uint8_t* iv, const uint8_t* sd, bool sd0_bot, unsigned int i,
                     unsigned int outlen, uint8_t* u, uint8_t* v, const faest_paramset_t* params) {
+/* dump the first seed for SM4 on i==0 before PRG */
+#if defined(FAEST_SM4_DEBUG)
+    if (params_is_sm4(params) && i == 0) {
+      sm4_dbg_hex_bytes("[SM4_DEBUG] convert_to_vole sd[1]", sd + (sd0_bot ? 0 : (params->lambda/8)), 16);
+    }
+#endif
   const unsigned int lambda        = params->lambda;
   const unsigned int tau_1         = params->tau1;
   const unsigned int k             = params->k;
@@ -88,9 +93,17 @@ static
       prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
     }
   }
-
 #if defined(FAEST_SM4_DEBUG)
-  if (i == 0) {
+if (params_is_sm4(params) && i == 0) {
+    if (num_instances > 1) {
+      /* show the PRG output for the second seed (row 0, column 1) */
+      sm4_dbg_hex_bytes("[SM4_DEBUG] convert_to_vole prg R(0,1)", R(0,1), 16);
+    }
+    if (num_instances > 1055) {
+      /* show the PRG output for the seed that corresponds to verifier's sd[1] */
+      sm4_dbg_hex_bytes("[SM4_DEBUG] convert_to_vole prg R(0,1055)", R(0,1055), 16);
+    }
+
     const unsigned int trace_col = 4u;
     const unsigned int trace_row = 1u;
     const unsigned int trace_j = trace_col;
@@ -120,8 +133,7 @@ static
     }
   }
 
-#if defined(FAEST_SM4_DEBUG)
-  if (i == 0 && depth > 4u) {
+if (params_is_sm4(params) && i == 0 && depth > 4u) {
     const unsigned int trace_col = 4u;
     const unsigned int trace_row = 1u;
     const unsigned int byte_idx = trace_row >> 3;
@@ -135,7 +147,6 @@ static
             "[SM4_DEBUG] vole_trace V bit (i==0, %s) col=%u row=%u bit=%u\n",
             side, trace_col, trace_row, (V(trace_col)[byte_idx] >> bit_idx) & 1u);
   }
-#endif
   // Step: 10
   if (!sd0_bot && u != NULL) {
     memcpy(u, R(depth, 0), outlen);
@@ -167,6 +178,20 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
   unsigned int v_idx = 0;
   uint8_t* sd_i      = bavc->sd;
   for (unsigned int i = 0; i < tau; ++i) {
+    /* diagnostics for SM4 prover side */
+#if defined(FAEST_SM4_DEBUG)
+    if (params_is_sm4(params)) {
+      if (i == 0) {
+        /* print the seed that will end up at verifier position 1 (index 1055) */
+        if (bavc_max_node_index(i, tau_1, k) > 1055) {
+          sm4_dbg_hex_bytes("[SM4_DEBUG] prover sd[1055]", sd_i + lambda_bytes * 1055, 16);
+        }
+        /* first non-zero seed comparison */
+        sm4_dbg_hex_bytes("[SM4_DEBUG] volley_commit sd[1]", sd_i + lambda_bytes, 16);
+      }
+      fprintf(stderr, "[SM4_DEBUG] vole_commit loop i=%u sd_i ptr=%p\n", i, (void*)sd_i);
+    }
+#endif
     // Step 6
     const unsigned int v_idx_before = v_idx;
     const unsigned int ki =
@@ -195,21 +220,17 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
     // Step 11
     xor_u8_array(u, ui + i * ellhat_bytes, c + (i - 1) * ellhat_bytes, ellhat_bytes);
   }
-#if defined(FAEST_SM4_DEBUG)
-  if (tau > 1) {
+  if (tau > 1 && params_is_sm4(params)) {
     const uint64_t c_hash = sm4_hash64_fnv1a(c, ellhat_bytes);
     fprintf(stderr, "[SM4_DEBUG] vole_commit_sm4 c_hash i=1 0x%016llx\n",
             (unsigned long long)c_hash);
   }
-#endif
   free(ui);
-#if defined(FAEST_SM4_DEBUG)
   if (params_is_sm4(params)) {
     const uint64_t q_hash = sm4_hash64_fnv1a(u, ellhat_bytes);
     fprintf(stderr, "[SM4_DEBUG] vole_commit_sm4 q_hash=0x%016llx\n",
             (unsigned long long)q_hash);
   }
-#endif
 }
 
 #if defined(FAEST_SM4_DEBUG)
@@ -362,6 +383,9 @@ void vole_debug_reconstruct_like_from_commit(const bavc_t* bavc, const uint16_t*
 bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_t* chall_3,
                       const uint8_t* decom_i, const uint8_t* c, unsigned int ellhat,
                       const faest_paramset_t* params) {
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] vole_reconstruct called\n");
+  }
   const unsigned int lambda       = params->lambda;
   const unsigned int lambda_bytes = lambda / 8;
   const unsigned int ellhat_bytes = (ellhat + 7) / 8;
@@ -411,6 +435,14 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
     }
 
     // Step: 7..8
+#if defined(FAEST_SM4_DEBUG)
+    if (params_is_sm4(params)) {
+      if (i == 0) {
+        sm4_dbg_hex_bytes("[SM4_DEBUG] vole_reconstruct_sm4 sd[1]", sd + lambda_bytes, 16);
+      }
+      fprintf(stderr, "[SM4_DEBUG] vole_reconstruct_sm4 before convert i=%u i_delta=%u sd_ptr=%p\n", i, i_delta[i], (void*)sd);
+    }
+#endif
     const unsigned int ki = convert_to_vole(iv, sd, true, i, ellhat_bytes, NULL, qtmp, params);
 
     // Step 11
@@ -436,13 +468,11 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
   free(qtmp);
   free(sd);
   free(bavc_rec.s);
-#if defined(FAEST_SM4_DEBUG)
   if (params_is_sm4(params)) {
     const uint64_t q_hash = sm4_hash64_fnv1a(q[0], ellhat_bytes);
     fprintf(stderr, "[SM4_DEBUG] vole_reconstruct q_hash=0x%016llx\n",
             (unsigned long long)q_hash);
   }
-#endif
   return true;
 }
 
@@ -457,23 +487,28 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
   const unsigned int L            = params->L;
   const unsigned int k            = params->k;
 
-#if defined(FAEST_SM4_DEBUG)
-  fprintf(stderr,
-          "[SM4_DEBUG] vole_reconstruct_sm4 ellhat=%u ellhat_bytes=%u tau=%u tau1=%u k=%u L=%u\n",
-          ellhat, ellhat_bytes, tau, tau1, k, L);
-#endif
+  if (params_is_sm4(params)) {
+    fprintf(stderr,
+            "[SM4_DEBUG] vole_reconstruct_sm4 ellhat=%u ellhat_bytes=%u tau=%u tau1=%u k=%u L=%u\n",
+            ellhat, ellhat_bytes, tau, tau1, k, L);
+  }
 
   uint16_t i_delta[MAX_TAU];
   if (!decode_all_chall_3_sm4(i_delta, chall_3, params)) {
     return false;
   }
-#if defined(FAEST_SM4_DEBUG)
-  fprintf(stderr, "[SM4_DEBUG] verify i_delta:");
-  for (unsigned int i = 0; i < params->tau; ++i) {
-    fprintf(stderr, " %u", i_delta[i]);
+  /* print full delta array and dump first seed when reconstructing */
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] verify i_delta:");
+    for (unsigned int ii = 0; ii < params->tau; ++ii) {
+      fprintf(stderr, " %u", i_delta[ii]);
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "[SM4_DEBUG] i_delta[0] hex=0x%04x\n", i_delta[0]);
+    /* first valid seed occupies sd[1] after permutation */
+    /* sd printing later inside loop */
   }
-  fprintf(stderr, "\n");
-#endif
+
 
   bavc_rec_t bavc_rec;
   bavc_rec.h = com;
@@ -506,9 +541,22 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
              lambda_bytes);
     }
 
+#if defined(FAEST_SM4_DEBUG)
+    if (params_is_sm4(params)) {
+      fprintf(stderr, "[SM4_DEBUG] vole_reconstruct_sm4 before convert i=%u i_delta=%u sd_ptr=%p\n", i, i_delta[i], (void*)sd);
+      if (i == 0) {
+        sm4_dbg_hex_bytes("[SM4_DEBUG] reconstruct_sd[1]", sd + lambda_bytes, 16);
+      }
+    }
+#endif
     const unsigned int ki = convert_to_vole(iv, sd, true, i, ellhat_bytes, NULL, qtmp, params);
-  #if defined(FAEST_SM4_DEBUG)
-    if (i < 2) {
+#if defined(FAEST_SM4_DEBUG)
+    if (params_is_sm4(params) && i == 0 && ki > 1) {
+      /* qtmp holds PRG output sequence, first element corresponds to R(0,1) */
+      sm4_dbg_hex_bytes("[SM4_DEBUG] reconstruct prg_from_sd1", qtmp, ellhat_bytes);
+    }
+#endif
+    if (params_is_sm4(params) && i < 2) {
       const size_t qtmp_len = (size_t)ki * ellhat_bytes;
       const uint64_t qtmp_hash = sm4_hash64_fnv1a(qtmp, qtmp_len);
       const uint64_t c_hash = (i == 0) ? 0ULL : sm4_hash64_fnv1a(c + (i - 1) * ellhat_bytes, ellhat_bytes);
@@ -516,7 +564,6 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
           "[SM4_DEBUG] vole_reconstruct_sm4 i=%u Ni=%u ki=%u q_idx=%u qtmp_hash=0x%016llx c_hash=0x%016llx\n",
           i, Ni, ki, q_idx, (unsigned long long)qtmp_hash, (unsigned long long)c_hash);
     }
-  #endif
 
     if (i == 0) {
       memcpy(q[q_idx], qtmp, ellhat_bytes * ki);

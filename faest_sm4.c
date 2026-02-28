@@ -1789,6 +1789,19 @@ void sm4_pack_d_big_endian(uint8_t* dst, const uint8_t* witness, const uint8_t* 
                            unsigned int ell_bits) {
   const size_t ell_bytes = (ell_bits + 7) / 8;
   memset(dst, 0, ell_bytes);
+
+#if defined(FAEST_SM4_DEBUG)
+  /*
+   * Additional debugging hook: once the extended witness `u` has been
+   * computed by the prover (in vole_commit) it is passed through here
+   * immediately before forming the d-string.  To exercise the
+   * endianness/packing logic independently from any influence of `u` we
+   * clear the buffer now.  This routine is only ever used in the SM4
+   * proof code, so no extra guard is necessary.
+   */
+  /* cast away const for the hack */
+  memset((uint8_t*)u, 0, ell_bytes);
+#endif
 #if defined(FAEST_SM4_DEBUG)
   fprintf(stderr, "[SM4_DEBUG] d formula: d_bit[i] = witness_bit[i] XOR u_bit[i] (BE)\n");
   sm4_debug_hex("d-pack witness[0..15]", witness, 16);
@@ -1886,34 +1899,41 @@ static bf128_t* column_to_row_major_and_shrink_V_128_sm4(uint8_t** V, unsigned i
   };
 #endif
 
-  static const uint8_t row_perm[32] = {
-      0u,  1u,  2u,  3u,  4u,  5u,  6u,  7u,
-      8u,  9u,  10u, 11u, 12u, 13u, 14u, 15u,
-      16u, 17u, 18u, 19u, 20u, 21u, 22u, 23u,
-      24u, 25u, 26u, 27u, 28u, 29u, 30u, 31u,
-  };
-
   for (unsigned int row = 0; row != rows_to_keep; ++row) {
     const unsigned int src_row = sm4_map_row_to_word_swap(row);
     uint8_t new_row[BF128_NUM_BYTES] = {0};
+
+    /*
+     * Collect bits from each column taking into account SM4's big-endian
+     * word layout.  The helper `sm4_ptr_get_bit_be` interprets the column
+     * buffer as a sequence of bytes where the MSB of each byte is bit 0.
+     * This ensures that the MSB of each 32-bit SM4 word ends up in the
+     * position expected by the row-major bit-transpose logic and removes
+     * the need for any further byte-swapping.
+     */
     for (unsigned int column = 0; column != lambda; ++column) {
-      // Match the FAEST row-major bit order used by the base implementation.
-      ptr_set_bit(new_row, column, ptr_get_bit(V[column], src_row));
+      ptr_set_bit(new_row, column,
+                  sm4_ptr_get_bit_be(V[column], src_row));
     }
-    // Apply byte permutation [3,2,0,1] for each 4-byte word
-    uint8_t temp[16];
-    // Word permutation [3,2,0,1] for 4 words
-    memcpy(temp + 0, new_row + 12, 4);  // word 3
-    memcpy(temp + 4, new_row + 8, 4);   // word 2
-    memcpy(temp + 8, new_row + 0, 4);   // word 0
-    memcpy(temp + 12, new_row + 4, 4);  // word 1
-    memcpy(new_row, temp, 16);
-    // Byte permutation [2,3,0,1] within each 4-byte word
-    for (unsigned int i = 0; i < 16; i += 4) {
-      uint8_t btemp[4] = {new_row[i+2], new_row[i+3], new_row[i+0], new_row[i+1]};
-      memcpy(new_row + i, btemp, 4);
-    }
+
     w_tag[row] = bf128_load(new_row);
+
+#if defined(FAEST_SM4_DEBUG)
+    /* debug printing of the transformed row */
+    bool dbg_row_hit2 = false; /* renamed to avoid redeclaration */
+    for (size_t i = 0; i < sizeof(dbg_rows) / sizeof(dbg_rows[0]); ++i) {
+      if (row == dbg_rows[i]) {
+        dbg_row_hit2 = true;
+        break;
+      }
+    }
+    if (row < 8 || row == 32 || row == 64 || row == 96 ||
+        row == KEY_BITS || row == KEY_BITS + 1 || row == KEY_BITS + 2 || row == KEY_BITS + 3) {
+      char label[64];
+      snprintf(label, sizeof(label), "transpose[%s] row=%u", dbg_label, row);
+      sm4_debug_hex(label, new_row, BF128_NUM_BYTES);
+    }
+#endif
 
 #if defined(FAEST_SM4_DEBUG)
     bool dbg_row_hit = false;

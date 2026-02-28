@@ -486,6 +486,27 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   }
   vole_commit(rootkey, iv, ell_hat, params, &bavc, signature_c(sig, 0, params), u, V);
 
+  /*
+   * DEBUG HACK: zero-out the extended witness produced by the prover.
+   *
+   * The purpose of this temporary instrumentation is to distinguish
+   * between two classes of bugs during SM4 debugging:
+   *   * if verifier's q still differs from prover's v after clearing u,
+   *     the problem lies in the underlying column_to_row_major transpose
+   *     operation; otherwise the issue is in the endianness->u mapping.
+   *
+   * We restrict the hack to SM4 instances and guard it under the
+   * FAEST_SM4_DEBUG build flag so that it can be enabled/disabled easily
+   * in the existing debug test harness.
+   */
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    fprintf(stderr, "[SM4_DEBUG] clearing extended witness u (ell_hat_bytes=%u)\n",
+            (unsigned)ell_hat_bytes);
+    memset(u, 0, ell_hat_bytes);
+  }
+#endif
+
   // ::8
   uint8_t chall_1[(5 * MAX_LAMBDA_BYTES) + 8];
   hash_challenge_1(chall_1, mu, bavc.h, signature_c(sig, 0, params), iv, lambda, ell, tau);
@@ -558,15 +579,14 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
       if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3, params)) {
         continue;
       }
-#if defined(FAEST_SM4_DEBUG)
-      {
-        fprintf(stderr, "[SM4_DEBUG] sign i_delta:");
-        for (unsigned int i = 0; i < params->tau; ++i) {
-          fprintf(stderr, " %u", decoded_chall_3[i]);
-        }
-        fprintf(stderr, "\n");
-        vole_debug_reconstruct_like_from_commit(&bavc, decoded_chall_3, iv, ell_hat, params);
+      /* print parsed delta values on prover side */
+      fprintf(stderr, "[SM4_DEBUG] sign i_delta:");
+      for (unsigned int i = 0; i < params->tau; ++i) {
+        fprintf(stderr, " %u", decoded_chall_3[i]);
       }
+      fprintf(stderr, "\n");
+#if defined(FAEST_SM4_DEBUG)
+      vole_debug_reconstruct_like_from_commit(&bavc, decoded_chall_3, iv, ell_hat, params);
 #endif
     } else if (!decode_all_chall_3(decoded_chall_3, chall_3, params)) {
       continue;

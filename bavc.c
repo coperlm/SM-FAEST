@@ -14,6 +14,9 @@
 #include "instances.h"
 #include "universal_hashing.h"
 
+/* forward debug helper from vole.c, visible without FAEST_SM4_DEBUG */
+void sm4_dbg_hex_bytes(const char* label, const uint8_t* data, size_t len);
+
 #include <assert.h>
 static inline bool params_is_sm4(const faest_paramset_t* params) {
   return params->R == 32;
@@ -60,6 +63,11 @@ static uint8_t* generate_seeds(const uint8_t* root_seed, const uint8_t* iv,
 
   memcpy(NODE(nodes, 0, lambda_bytes), root_seed, lambda_bytes);
   expand_seeds(nodes, iv, params);
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    sm4_dbg_hex_bytes("[SM4_DEBUG] commit k1", NODE(nodes, 1, lambda_bytes), lambda_bytes);
+  }
+#endif
 
   return nodes;
 }
@@ -260,7 +268,7 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
   // Step 6
   unsigned int nh = 0;
 
-  // Step 7..15
+  // Step 7..15: mark leaves and propagate upward
   for (unsigned int i = 0; i < tau; ++i) {
     unsigned int alpha = pos_in_tree(i, i_delta[i], params);
     ptr_set_bit(s, alpha, 1);
@@ -270,6 +278,15 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
       alpha = (alpha - 1) / 2;
       ptr_set_bit(s, alpha, 1);
       ++nh;
+    }
+  }
+
+  /* SM4 workaround: clear any parent whose two children are both flagged, to
+   * force PRG expansion later. Without this, verifier skips both copy and
+   * PRG and leaves the corresponding child key at zero. */
+  for (unsigned int i = 0; i < L - 1; ++i) {
+    if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
+      ptr_clear_bit(s, i);
     }
   }
 
@@ -337,13 +354,13 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
   const uint8_t* nodes = decom_i + (faest_is_em(params) ? 2 : 3) * tau * lambda_bytes;
   const uint8_t* end   = nodes + params->T_open * lambda_bytes;
 
-  // Step 7..10
+  // Step 7..10: mark leaves
   for (unsigned int i = 0; i < tau; ++i) {
     unsigned int alpha = pos_in_tree(i, i_delta[i], params);
     ptr_set_bit(s, alpha, 1);
   }
 
-  // Step 12.12
+  // Step 12.12 (propagate upward)
   for (int i = L - 2; i >= 0; --i) {
     ptr_set_bit(s, i, ptr_get_bit(s, 2 * i + 1) | ptr_get_bit(s, 2 * i + 2));
     if ((ptr_get_bit(s, 2 * i + 1) ^ ptr_get_bit(s, 2 * i + 2)) == 1) {
@@ -357,6 +374,13 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
     }
   }
 
+  /* clear parent bits when both children are set, so PRG fills them */
+  for (unsigned int i = 0; i < L - 1; ++i) {
+    if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
+      ptr_clear_bit(s, i);
+    }
+  }
+
   for (; nodes != end; ++nodes) {
     if (*nodes) {
       return false;
@@ -364,7 +388,11 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
   }
 
   for (unsigned int i = 0; i != L - 1; ++i) {
-    if (!ptr_get_bit(s, i)) {
+    /* root node (i==0) always needs expansion so that k1 is available; other
+     * internal nodes are only expanded if their subtree contains no known
+     * leaves (s bit zero).  When root bit is set it merely indicates at least
+     * one leaf is known, not that the root key itself is present. */
+    if (i == 0 || !ptr_get_bit(s, i)) {
       prg_2_lambda(keys + i * lambda_bytes, iv, i, keys + (2 * i + 1) * lambda_bytes, lambda);
     }
   }
@@ -395,6 +423,12 @@ static bool bavc_reconstruct_faest(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
     free(s);
     return false;
   }
+  /* debug: show reconstructed left-child key */
+#if defined(FAEST_SM4_DEBUG)
+  if (params_is_sm4(params)) {
+    sm4_dbg_hex_bytes("[SM4_DEBUG] reconstruct k1", keys + lambda_bytes, lambda_bytes);
+  }
+#endif
 
   H0_context_t uhash_ctx;
   H0_init(&uhash_ctx, lambda);

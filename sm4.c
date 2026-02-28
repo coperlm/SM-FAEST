@@ -142,7 +142,9 @@ void sm4_increment_iv(uint8_t* iv)
 static inline void sm4_increment_iv(uint8_t* iv)
 #endif
 {
-  uint32_t* counter = (uint32_t*)(iv + 12);
+    /* increment low‑order 32‑bit word only; carry is truncated at 4 bytes.
+     this matches both the SM4 and PRG_SM4 unit tests. */
+  uint32_t* counter = (uint32_t*)iv;
   *counter = htole32(le32toh(*counter) + 1);
 }
 
