@@ -14,9 +14,6 @@
 #include "instances.h"
 #include "universal_hashing.h"
 
-/* forward debug helper from vole.c, visible without FAEST_SM4_DEBUG */
-void sm4_dbg_hex_bytes(const char* label, const uint8_t* data, size_t len);
-
 #include <assert.h>
 static inline bool params_is_sm4(const faest_paramset_t* params) {
   return params->R == 32;
@@ -26,24 +23,6 @@ static inline bool params_is_sm4(const faest_paramset_t* params) {
 
 #define NODE(nodes, node, lambda_bytes) (&nodes[(node) * (lambda_bytes)])
 
-#if defined(FAEST_SM4_DEBUG)
-static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
-  uint64_t h = 1469598103934665603ULL;
-  for (size_t i = 0; i < len; ++i) {
-    h ^= (uint64_t)data[i];
-    h *= 1099511628211ULL;
-  }
-  return h;
-}
-
-static uint64_t sm4_hash64_fnv1a_update(uint64_t h, const uint8_t* data, size_t len) {
-  for (size_t i = 0; i < len; ++i) {
-    h ^= (uint64_t)data[i];
-    h *= 1099511628211ULL;
-  }
-  return h;
-}
-#endif
 
 static void expand_seeds(uint8_t* nodes, const uint8_t* iv, const faest_paramset_t* params) {
   const unsigned int lambda_bytes = params->lambda / 8;
@@ -63,11 +42,6 @@ static uint8_t* generate_seeds(const uint8_t* root_seed, const uint8_t* iv,
 
   memcpy(NODE(nodes, 0, lambda_bytes), root_seed, lambda_bytes);
   expand_seeds(nodes, iv, params);
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    sm4_dbg_hex_bytes("[SM4_DEBUG] commit k1", NODE(nodes, 1, lambda_bytes), lambda_bytes);
-  }
-#endif
 
   return nodes;
 }
@@ -180,12 +154,6 @@ static void bavc_commit_faest(bavc_t* bavc, const uint8_t* root_key, const uint8
 
   // Step 12
   H1_final(&h1_com_ctx, bavc->h, lambda_bytes * 2);
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    fprintf(stderr, "[SM4_DEBUG] bavc_commit_faest h=0x%016llx\n",
-            (unsigned long long)sm4_hash64_fnv1a(bavc->h, lambda_bytes * 2));
-  }
-#endif
 }
 
 // BAVC.Commit for FAEST-EM
@@ -320,26 +288,6 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
 
 bool bavc_open_sm4(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
                    const faest_paramset_t* params) {
-#if defined(FAEST_SM4_DEBUG)
-  const unsigned int lambda_bytes = params->lambda / 8;
-  const unsigned int com_size     = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
-  fprintf(stderr,
-          "[SM4_DEBUG] bavc_open_sm4 tau=%u tau1=%u k=%u L=%u T_open=%u com_size=%u\n",
-          params->tau, params->tau1, params->k, params->L, params->T_open, com_size);
-
-  uint64_t s_hash = 1469598103934665603ULL;
-  unsigned int offset = 0;
-  for (unsigned int i = 0; i < params->tau; ++i) {
-    const unsigned int Ni = bavc_max_node_index(i, params->tau1, params->k);
-    for (unsigned int j = 0; j < Ni; ++j, ++offset) {
-      if (j != i_delta[i]) {
-        s_hash = sm4_hash64_fnv1a_update(s_hash, vc->sd + offset * lambda_bytes, lambda_bytes);
-      }
-    }
-  }
-  fprintf(stderr, "[SM4_DEBUG] bavc_open_sm4 s_hash=0x%016llx\n",
-          (unsigned long long)s_hash);
-#endif
   return bavc_open(decom_i, vc, i_delta, params);
 }
 
@@ -424,11 +372,6 @@ static bool bavc_reconstruct_faest(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
     return false;
   }
   /* debug: show reconstructed left-child key */
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    sm4_dbg_hex_bytes("[SM4_DEBUG] reconstruct k1", keys + lambda_bytes, lambda_bytes);
-  }
-#endif
 
   H0_context_t uhash_ctx;
   H0_init(&uhash_ctx, lambda);
@@ -466,12 +409,6 @@ static bool bavc_reconstruct_faest(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
   H0_clear(&uhash_ctx);
 
   H1_final(&h1_com_ctx, bavc_rec->h, lambda_bytes * 2);
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_faest h=0x%016llx\n",
-            (unsigned long long)sm4_hash64_fnv1a(bavc_rec->h, lambda_bytes * 2));
-  }
-#endif
 
   free(keys);
   free(s);
@@ -545,30 +482,6 @@ bool bavc_reconstruct(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16
 bool bavc_reconstruct_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,
                           const uint8_t* iv, const faest_paramset_t* params) {
   const bool ok = bavc_reconstruct(bavc_rec, decom_i, i_delta, iv, params);
-#if defined(FAEST_SM4_DEBUG)
-  const unsigned int lambda_bytes = params->lambda / 8;
-  const unsigned int com_size     = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
-  fprintf(stderr,
-          "[SM4_DEBUG] bavc_reconstruct_sm4 tau=%u tau1=%u k=%u L=%u T_open=%u com_size=%u\n",
-          params->tau, params->tau1, params->k, params->L, params->T_open, com_size);
-  if (ok) {
-    const unsigned int tau = params->tau;
-    const unsigned int L   = params->L;
-    const unsigned int limit = (tau < 3u) ? tau : 3u;
-    const uint8_t* nodes = decom_i + (faest_is_em(params) ? 2 : 3) * tau * lambda_bytes;
-    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 sample nodes:");
-    for (unsigned int i = 0; i < limit; ++i) {
-      const unsigned int alpha = pos_in_tree(i, i_delta[i], params);
-      fprintf(stderr, " (i=%u alpha=%u)", i, alpha);
-    }
-    fprintf(stderr, "\n");
-    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 nodes_range=[%zu,%zu)\n",
-            (size_t)(nodes - decom_i),
-            (size_t)(nodes - decom_i + params->T_open * lambda_bytes));
-    fprintf(stderr, "[SM4_DEBUG] bavc_reconstruct_sm4 s_hash=0x%016llx\n",
-            (unsigned long long)sm4_hash64_fnv1a(bavc_rec->s, (size_t)(L - tau) * lambda_bytes));
-  }
-#endif
   return ok;
 }
 

@@ -62,10 +62,5 @@ bool decode_all_chall_3(uint16_t* decoded_chall, const uint8_t* chall,
 
 bool decode_all_chall_3_sm4(uint16_t* decoded_chall, const uint8_t* chall,
                             const faest_paramset_t* params) {
-#if defined(FAEST_SM4_DEBUG)
-  fprintf(stderr,
-          "[SM4_DEBUG] decode_all_chall_3_sm4 tau=%u tau1=%u k=%u lambda=%u\n",
-          params->tau, params->tau1, params->k, params->lambda);
-#endif
   return decode_all_chall_3(decoded_chall, chall, params);
 }

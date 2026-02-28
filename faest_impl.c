@@ -169,100 +169,6 @@ ATTR_PURE static inline const uint8_t* dsignature_ctr(const uint8_t* base_ptr,
   return base_ptr + params->sig_size - sizeof(uint32_t);
 }
 
-#if defined(FAEST_SM4_DEBUG)
-typedef struct sm4_sig_sizes_t {
-  unsigned int ell_bytes;
-  unsigned int lambda_bytes;
-  unsigned int ell_hat_bytes;
-  unsigned int utilde_bytes;
-  unsigned int c_bytes;
-  unsigned int a_bytes;
-  unsigned int tail_bytes;
-  unsigned int fixed_bytes;
-  unsigned int decom_i_bytes;
-} sm4_sig_sizes_t;
-
-static sm4_sig_sizes_t sm4_calc_sig_sizes(const faest_paramset_t* params) {
-  sm4_sig_sizes_t sizes;
-  sizes.lambda_bytes  = params->lambda / 8;
-  sizes.ell_bytes     = params->l / 8;
-  sizes.ell_hat_bytes = sizes.ell_bytes + 3 * sizes.lambda_bytes + UNIVERSAL_HASH_B;
-  sizes.utilde_bytes  = sizes.lambda_bytes + UNIVERSAL_HASH_B;
-  sizes.c_bytes       = (params->tau - 1) * sizes.ell_hat_bytes;
-  sizes.a_bytes       = 2 * sizes.lambda_bytes;
-  sizes.tail_bytes    = IV_SIZE + sizes.lambda_bytes + sizeof(uint32_t);
-  sizes.fixed_bytes   = sizes.c_bytes + sizes.utilde_bytes + sizes.ell_bytes + sizes.a_bytes +
-          sizes.tail_bytes;
-  sizes.decom_i_bytes = (params->sig_size > sizes.fixed_bytes)
-        ? (params->sig_size - sizes.fixed_bytes)
-        : 0;
-  return sizes;
-}
-
-static uint64_t sm4_hash64_fnv1a(const uint8_t* data, size_t len) {
-  uint64_t h = 1469598103934665603ULL;
-  for (size_t i = 0; i < len; ++i) {
-    h ^= (uint64_t)data[i];
-    h *= 1099511628211ULL;
-  }
-  return h;
-}
-
-static uint64_t sm4_dbg_sign_c_hash = 0;
-static uint64_t sm4_dbg_sign_decom_hash = 0;
-static unsigned int sm4_dbg_sign_c_len = 0;
-static unsigned int sm4_dbg_sign_decom_len = 0;
-
-static void sm4_log_signature_layout_sign(uint8_t* sig, const faest_paramset_t* params) {
-  const sm4_sig_sizes_t sizes = sm4_calc_sig_sizes(params);
-
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_layout_sign sig_size=%u ell=%u lambda=%u tau=%u\n",
-    params->sig_size, params->l, params->lambda, params->tau);
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_sizes c=%u u_tilde=%u d=%u a1+a2=%u decom_i=%u iv_pre=%u chall_3=%u ctr=%u total=%u\n",
-    sizes.c_bytes, sizes.utilde_bytes, sizes.ell_bytes, sizes.a_bytes, sizes.decom_i_bytes,
-    IV_SIZE, sizes.lambda_bytes, (unsigned int)sizeof(uint32_t),
-    sizes.fixed_bytes + sizes.decom_i_bytes);
-
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_offsets c0=%zu u_tilde=%zu d=%zu a1=%zu a2=%zu decom_i=%zu chall_3=%zu iv_pre=%zu ctr=%zu\n",
-    (size_t)(signature_c(sig, 0, params) - sig),
-    (size_t)(signature_u_tilde(sig, params) - sig),
-    (size_t)(signature_d(sig, params) - sig),
-    (size_t)(signature_a1_tilde(sig, params) - sig),
-    (size_t)(signature_a2_tilde(sig, params) - sig),
-    (size_t)(signature_decom_i(sig, params) - sig),
-    (size_t)(signature_chall_3(sig, params) - sig),
-    (size_t)(signature_iv_pre(sig, params) - sig),
-    (size_t)(signature_ctr(sig, params) - sig));
-}
-
-static void sm4_log_signature_layout_verify(const uint8_t* sig, const faest_paramset_t* params) {
-  const sm4_sig_sizes_t sizes = sm4_calc_sig_sizes(params);
-
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_layout_verify sig_size=%u ell=%u lambda=%u tau=%u\n",
-    params->sig_size, params->l, params->lambda, params->tau);
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_sizes c=%u u_tilde=%u d=%u a1+a2=%u decom_i=%u iv_pre=%u chall_3=%u ctr=%u total=%u\n",
-    sizes.c_bytes, sizes.utilde_bytes, sizes.ell_bytes, sizes.a_bytes, sizes.decom_i_bytes,
-    IV_SIZE, sizes.lambda_bytes, (unsigned int)sizeof(uint32_t),
-    sizes.fixed_bytes + sizes.decom_i_bytes);
-
-  fprintf(stderr,
-    "[SM4_DEBUG] sig_offsets c0=%zu u_tilde=%zu d=%zu a1=%zu a2=%zu decom_i=%zu chall_3=%zu iv_pre=%zu ctr=%zu\n",
-    (size_t)(dsignature_c(sig, 0, params) - sig),
-    (size_t)(dsignature_u_tilde(sig, params) - sig),
-    (size_t)(dsignature_d(sig, params) - sig),
-    (size_t)(dsignature_a1_tilde(sig, params) - sig),
-    (size_t)(dsignature_a2_tilde(sig, params) - sig),
-    (size_t)(dsignature_decom_i(sig, params) - sig),
-    (size_t)(dsignature_chall_3(sig, params) - sig),
-    (size_t)(dsignature_iv_pre(sig, params) - sig),
-    (size_t)(dsignature_ctr(sig, params) - sig));
-}
-#endif
 
 // FAEST.Sign: line 3
 static void hash_mu(uint8_t* mu, const uint8_t* owf_input, size_t owf_input_size,
@@ -449,11 +355,6 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   const unsigned int ell_hat_bytes = ell_hat / 8;
   const unsigned int w_grind       = params->w_grind;
 
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    sm4_log_signature_layout_sign(sig, params);
-  }
-#endif
 
   // ::3
   uint8_t mu[MAX_LAMBDA_BYTES * 2];
@@ -463,14 +364,6 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   // ::4-5
   uint8_t rootkey[MAX_LAMBDA_BYTES], iv[IV_SIZE];
   hash_r_iv(rootkey, signature_iv_pre(sig, params), iv, owf_key, mu, rho, rholen, lambda);
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    const uint64_t iv_pre_hash = sm4_hash64_fnv1a(signature_iv_pre(sig, params), IV_SIZE);
-    const uint64_t iv_hash = sm4_hash64_fnv1a(iv, IV_SIZE);
-    fprintf(stderr, "[SM4_DEBUG] sign iv_pre hash=0x%016llx iv hash=0x%016llx\n",
-            (unsigned long long)iv_pre_hash, (unsigned long long)iv_hash);
-  }
-#endif
 
   // ::6-7
   bavc_t bavc;
@@ -485,27 +378,6 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     V[i] = V[0] + i * ell_hat_bytes;
   }
   vole_commit(rootkey, iv, ell_hat, params, &bavc, signature_c(sig, 0, params), u, V);
-
-  /*
-   * DEBUG HACK: zero-out the extended witness produced by the prover.
-   *
-   * The purpose of this temporary instrumentation is to distinguish
-   * between two classes of bugs during SM4 debugging:
-   *   * if verifier's q still differs from prover's v after clearing u,
-   *     the problem lies in the underlying column_to_row_major transpose
-   *     operation; otherwise the issue is in the endianness->u mapping.
-   *
-   * We restrict the hack to SM4 instances and guard it under the
-   * FAEST_SM4_DEBUG build flag so that it can be enabled/disabled easily
-   * in the existing debug test harness.
-   */
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    fprintf(stderr, "[SM4_DEBUG] clearing extended witness u (ell_hat_bytes=%u)\n",
-            (unsigned)ell_hat_bytes);
-    memset(u, 0, ell_hat_bytes);
-  }
-#endif
 
   // ::8
   uint8_t chall_1[(5 * MAX_LAMBDA_BYTES) + 8];
@@ -579,15 +451,6 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
       if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3, params)) {
         continue;
       }
-#if defined(FAEST_SM4_DEBUG)
-      /* print parsed delta values on prover side */
-      fprintf(stderr, "[SM4_DEBUG] sign i_delta:");
-      for (unsigned int i = 0; i < params->tau; ++i) {
-        fprintf(stderr, " %u", decoded_chall_3[i]);
-      }
-      fprintf(stderr, "\n");
-      vole_debug_reconstruct_like_from_commit(&bavc, decoded_chall_3, iv, ell_hat, params);
-#endif
     } else if (!decode_all_chall_3(decoded_chall_3, chall_3, params)) {
       continue;
     }
@@ -595,23 +458,6 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     // :27
     if (params_is_sm4(params)) {
       if (bavc_open_sm4(signature_decom_i(sig, params), &bavc, decoded_chall_3, params)) {
-#if defined(FAEST_SM4_DEBUG)
-        const sm4_sig_sizes_t sizes = sm4_calc_sig_sizes(params);
-        const uint8_t* c_ptr = signature_c(sig, 0, params);
-        const uint8_t* decom_ptr = signature_decom_i(sig, params);
-        sm4_dbg_sign_c_len = sizes.c_bytes;
-        sm4_dbg_sign_decom_len = sizes.decom_i_bytes;
-        sm4_dbg_sign_c_hash = sm4_hash64_fnv1a(c_ptr, sizes.c_bytes);
-        sm4_dbg_sign_decom_hash = sm4_hash64_fnv1a(decom_ptr, sizes.decom_i_bytes);
-        fprintf(stderr,
-                "[SM4_DEBUG] sign c range=[%zu,%zu) hash=0x%016llx\n",
-                (size_t)(c_ptr - sig), (size_t)(c_ptr - sig + sizes.c_bytes),
-                (unsigned long long)sm4_dbg_sign_c_hash);
-        fprintf(stderr,
-                "[SM4_DEBUG] sign decom_i range=[%zu,%zu) hash=0x%016llx\n",
-                (size_t)(decom_ptr - sig), (size_t)(decom_ptr - sig + sizes.decom_i_bytes),
-                (unsigned long long)sm4_dbg_sign_decom_hash);
-#endif
         break;
       }
     } else if (bavc_open(signature_decom_i(sig, params), &bavc, decoded_chall_3, params)) {
@@ -636,11 +482,6 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   const unsigned int ell_hat_bytes = ell_hat / 8;
   const unsigned int utilde_bytes  = lambda_bytes + UNIVERSAL_HASH_B;
 
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    sm4_log_signature_layout_verify(sig, params);
-  }
-#endif
 
   // ::4-5
   if (!check_challenge_3(dsignature_chall_3(sig, params), lambda - params->w_grind, lambda)) {
@@ -655,14 +496,6 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // ::3
   uint8_t iv[IV_SIZE];
   hash_iv(iv, dsignature_iv_pre(sig, params), lambda);
-#if defined(FAEST_SM4_DEBUG)
-  if (params_is_sm4(params)) {
-    const uint64_t iv_pre_hash = sm4_hash64_fnv1a(dsignature_iv_pre(sig, params), IV_SIZE);
-    const uint64_t iv_hash = sm4_hash64_fnv1a(iv, IV_SIZE);
-    fprintf(stderr, "[SM4_DEBUG] verify iv_pre hash=0x%016llx iv hash=0x%016llx\n",
-            (unsigned long long)iv_pre_hash, (unsigned long long)iv_hash);
-  }
-#endif
 
   // Step: 6-7
   // q is a \hat \ell \times \lambda matrix
@@ -676,37 +509,6 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   uint8_t hcom[MAX_LAMBDA_BYTES * 2];
 
   if (params_is_sm4(params)) {
-#if defined(FAEST_SM4_DEBUG)
-    {
-      const sm4_sig_sizes_t sizes = sm4_calc_sig_sizes(params);
-      const uint8_t* c_ptr = dsignature_c(sig, 0, params);
-      const uint8_t* decom_ptr = dsignature_decom_i(sig, params);
-      const uint64_t verify_c_hash = sm4_hash64_fnv1a(c_ptr, sizes.c_bytes);
-      const uint64_t verify_decom_hash = sm4_hash64_fnv1a(decom_ptr, sizes.decom_i_bytes);
-      fprintf(stderr,
-              "[SM4_DEBUG] verify c range=[%zu,%zu) hash=0x%016llx\n",
-              (size_t)(c_ptr - sig), (size_t)(c_ptr - sig + sizes.c_bytes),
-              (unsigned long long)verify_c_hash);
-      fprintf(stderr,
-              "[SM4_DEBUG] verify decom_i range=[%zu,%zu) hash=0x%016llx\n",
-              (size_t)(decom_ptr - sig), (size_t)(decom_ptr - sig + sizes.decom_i_bytes),
-              (unsigned long long)verify_decom_hash);
-
-      if (sm4_dbg_sign_c_len == sizes.c_bytes && sm4_dbg_sign_decom_len == sizes.decom_i_bytes) {
-        if (sm4_dbg_sign_c_hash != verify_c_hash) {
-          fprintf(stderr,
-                  "[SM4_DEBUG] c hash mismatch sign=0x%016llx verify=0x%016llx\n",
-                  (unsigned long long)sm4_dbg_sign_c_hash, (unsigned long long)verify_c_hash);
-        }
-        if (sm4_dbg_sign_decom_hash != verify_decom_hash) {
-          fprintf(stderr,
-                  "[SM4_DEBUG] decom_i hash mismatch sign=0x%016llx verify=0x%016llx\n",
-                  (unsigned long long)sm4_dbg_sign_decom_hash,
-                  (unsigned long long)verify_decom_hash);
-        }
-      }
-    }
-#endif
     if (!vole_reconstruct_sm4(hcom, q, iv, dsignature_chall_3(sig, params),
                               dsignature_decom_i(sig, params), dsignature_c(sig, 0, params),
                               ell_hat, params)) {

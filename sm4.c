@@ -12,11 +12,6 @@
 #include "utils.h"
 
 #include <string.h>
-#include <stdio.h>
-
-#ifndef FAEST_SM4_DEBUG
-#define FAEST_SM4_DEBUG 0
-#endif
 
 // ============ SM4 S-box (国密标准 GM/T 0002-2012) ============
 static const uint8_t SM4_SBOX[256] = {
@@ -237,22 +232,12 @@ uint8_t sm4_invnorm(uint8_t x) {
 void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
                         const faest_paramset_t* params) {
   const bool is_em = (params->Ske == 0); // 检查是否为 EM 模式
+  uint8_t* w_out = w;
 
-#if defined(FAEST_SM4_DEBUG)
-  uint8_t* const w_out = w;
-#endif
 
   const uint8_t* actual_key = key;
   const uint8_t* actual_in  = in;
 
-#if defined(FAEST_SM4_DEBUG)
-  fprintf(stderr,
-          "[SM4_DEBUG] witness_layout base=%p Lke_bytes=%u l_bytes=%u is_em=%u\n",
-          (void*)w_out, params->Lke / 8, params->l / 8, is_em ? 1u : 0u);
-  fprintf(stderr,
-          "[SM4_DEBUG] witness_layout enc_rounds=1..%u odd_round_bytes=8 even_round_bytes=16\n",
-          params->R - 1);
-#endif
   
   // EM 模式：交换 key 和 input
   if (is_em) {
@@ -277,32 +262,17 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   // 步骤 2: 记录密钥扩展见证（标准模式需要，EM 模式跳过）
   if (!is_em) {
     const unsigned int nk = params->lambda / 32; // SM4-128: nk = 4
-#if defined(FAEST_SM4_DEBUG)
-    size_t seg_start = (size_t)(w - w_out);
-#endif
     // 记录初始密钥（nk 个字），使用 K[0..3] = MK ^ FK
     for (unsigned int i = 0; i != nk; ++i) {
       sm4_uint32_to_bytes(K[i], w);
       w += 4;
     }
-#if defined(FAEST_SM4_DEBUG)
-    fprintf(stderr,
-            "[SM4_DEBUG] witness_layout keyexp_mk range=[%zu..%zu]\n",
-            seg_start, (size_t)(w - w_out - 1));
-    seg_start = (size_t)(w - w_out);
-#endif
     
     // 记录全部 32 轮密钥 K[4..35]
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
       sm4_uint32_to_bytes(rk.round_keys[round], w);
       w += 4;
     }
-#if defined(FAEST_SM4_DEBUG)
-    fprintf(stderr,
-            "[SM4_DEBUG] witness_layout keyexp_rk range=[%zu..%zu]\n",
-            seg_start, (size_t)(w - w_out - 1));
-    seg_start = (size_t)(w - w_out);
-#endif
 
     // 记录每轮 S-box 输入的逆范数（4 字节），总计 32*4 = 128 字节
     // 注意：invnorm 必须应用于 S-box 输入（类似 AES 在 sub_bytes 之前保存），而不是输出
@@ -316,11 +286,6 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
         *w++ = sm4_invnorm(x_bytes[j]);  // invnorm of S-box INPUT
       }
     }
-#if defined(FAEST_SM4_DEBUG)
-    fprintf(stderr,
-            "[SM4_DEBUG] witness_layout keyexp_inv_norm range=[%zu..%zu]\n",
-            seg_start, (size_t)(w - w_out - 1));
-#endif
   } else {
     const unsigned int lambda_bytes = params->lambda / 8;
     
@@ -332,11 +297,6 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   assert(w - w_out == params->Lke / 8);
   
   // 步骤 3: 记录加密过程的中间状态
-#if defined(FAEST_SM4_DEBUG)
-  fprintf(stderr,
-          "[SM4_DEBUG] witness_layout enc_start offset=%zu\n",
-          (size_t)(w - w_out));
-#endif
   uint32_t state[4]; // 当前状态 X[i..i+3]
   
   // 加载明文/输入
