@@ -4,8 +4,9 @@ set -euo pipefail
 # set -euxo pipefail
 
 FAEST_128S="faest_128s"
+FAEST_SM4_128S="faest_sm4_128s"
 
-ALL="FAEST_128S"
+ALL="FAEST_128S FAEST_SM4_128S"
 
 BUILD_DIR="build_release"
 SM4_DEBUG_FILTER="${SM4_DEBUG_FILTER:-1}"
