@@ -232,7 +232,9 @@ uint8_t sm4_invnorm(uint8_t x) {
 void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
                         const faest_paramset_t* params) {
   const bool is_em = (params->Ske == 0); // 检查是否为 EM 模式
-  uint8_t* w_out = w;
+#if !defined(NDEBUG)
+  uint8_t* const w_out = w;
+#endif
 
 
   const uint8_t* actual_key = key;
@@ -294,7 +296,9 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
     w += lambda_bytes;
   }
   
+#if !defined(NDEBUG)
   assert(w - w_out == params->Lke / 8);
+#endif
   
   // 步骤 3: 记录加密过程的中间状态
   uint32_t state[4]; // 当前状态 X[i..i+3]

@@ -36,7 +36,7 @@ run_test () {
 
 convert_to_us () {
     input="$1"
-    if ! echo "${input}" | grep -Pq '^\d+(\.\d+)? (u|m|n)?s$'; then
+    if ! echo "${input}" | grep -Pq '^\d+(\.\d+)? (ns|us|ms|s|m)$'; then
         echo "unexpected format: '${input}'" >&2
         exit 1
     fi
@@ -50,6 +50,8 @@ convert_to_us () {
         echo "scale=10; ${num} * 1000"  | bc
     elif [ "$unit" = "s" ]; then
         echo "scale=10; ${num} * 1000 * 1000"  | bc
+    elif [ "$unit" = "m" ]; then
+        echo "scale=10; ${num} * 60 * 1000 * 1000"  | bc
     fi
 }
 
@@ -91,7 +93,7 @@ gather_metadata () {
         --arg "hostname" "${hostname}" \
         --arg "user" "${user}" \
         --arg "timestamp" "${timestamp}" \
-        --arg "git_commit" "${timestamp}" \
+        --arg "git_commit" "${git_commit}" \
         '$ARGS.named' \
         `"
     echo "${json}"
