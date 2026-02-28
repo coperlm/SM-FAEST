@@ -220,17 +220,21 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
     // Step 11
     xor_u8_array(u, ui + i * ellhat_bytes, c + (i - 1) * ellhat_bytes, ellhat_bytes);
   }
+#if defined(FAEST_SM4_DEBUG)
   if (tau > 1 && params_is_sm4(params)) {
     const uint64_t c_hash = sm4_hash64_fnv1a(c, ellhat_bytes);
     fprintf(stderr, "[SM4_DEBUG] vole_commit_sm4 c_hash i=1 0x%016llx\n",
             (unsigned long long)c_hash);
   }
+#endif
   free(ui);
+#if defined(FAEST_SM4_DEBUG)
   if (params_is_sm4(params)) {
     const uint64_t q_hash = sm4_hash64_fnv1a(u, ellhat_bytes);
     fprintf(stderr, "[SM4_DEBUG] vole_commit_sm4 q_hash=0x%016llx\n",
             (unsigned long long)q_hash);
   }
+#endif
 }
 
 #if defined(FAEST_SM4_DEBUG)
@@ -487,16 +491,19 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
   const unsigned int L            = params->L;
   const unsigned int k            = params->k;
 
+#if defined(FAEST_SM4_DEBUG)
   if (params_is_sm4(params)) {
     fprintf(stderr,
             "[SM4_DEBUG] vole_reconstruct_sm4 ellhat=%u ellhat_bytes=%u tau=%u tau1=%u k=%u L=%u\n",
             ellhat, ellhat_bytes, tau, tau1, k, L);
   }
+#endif
 
   uint16_t i_delta[MAX_TAU];
   if (!decode_all_chall_3_sm4(i_delta, chall_3, params)) {
     return false;
   }
+#if defined(FAEST_SM4_DEBUG)
   /* print full delta array and dump first seed when reconstructing */
   if (params_is_sm4(params)) {
     fprintf(stderr, "[SM4_DEBUG] verify i_delta:");
@@ -508,6 +515,7 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
     /* first valid seed occupies sd[1] after permutation */
     /* sd printing later inside loop */
   }
+#endif
 
 
   bavc_rec_t bavc_rec;
@@ -556,6 +564,7 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
       sm4_dbg_hex_bytes("[SM4_DEBUG] reconstruct prg_from_sd1", qtmp, ellhat_bytes);
     }
 #endif
+#if defined(FAEST_SM4_DEBUG)
     if (params_is_sm4(params) && i < 2) {
       const size_t qtmp_len = (size_t)ki * ellhat_bytes;
       const uint64_t qtmp_hash = sm4_hash64_fnv1a(qtmp, qtmp_len);
@@ -564,6 +573,7 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
           "[SM4_DEBUG] vole_reconstruct_sm4 i=%u Ni=%u ki=%u q_idx=%u qtmp_hash=0x%016llx c_hash=0x%016llx\n",
           i, Ni, ki, q_idx, (unsigned long long)qtmp_hash, (unsigned long long)c_hash);
     }
+#endif
 
     if (i == 0) {
       memcpy(q[q_idx], qtmp, ellhat_bytes * ki);

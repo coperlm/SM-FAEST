@@ -71,8 +71,8 @@ BOOST_AUTO_TEST_CASE(test_sm4_inverse_affine_correctness) {
   printf("SM4 inverse affine test: %d successes, %d failures out of 255\n", 
          success_count, fail_count);
   
-  // 验证至少 90% 的测试通过（应该是 100%，但先设一个宽松的阈值）
-  BOOST_CHECK(success_count >= 230);
+  // 严格要求全部255个非零元素通过
+  BOOST_CHECK_EQUAL(success_count, 255);
 }
 
 BOOST_AUTO_TEST_CASE(test_sm4_inverse_affine_specific_values) {
@@ -148,8 +148,8 @@ BOOST_AUTO_TEST_CASE(test_sm4_sbox_structure) {
   
   printf("SM4 S-box structure test: %d/255 matches\n", match_count);
   
-  // 验证至少 90% 匹配
-  BOOST_CHECK(match_count >= 230);
+  // 严格要求全部255个非零元素通过
+  BOOST_CHECK_EQUAL(match_count, 255);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

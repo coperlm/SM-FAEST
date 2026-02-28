@@ -579,13 +579,13 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
       if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3, params)) {
         continue;
       }
+#if defined(FAEST_SM4_DEBUG)
       /* print parsed delta values on prover side */
       fprintf(stderr, "[SM4_DEBUG] sign i_delta:");
       for (unsigned int i = 0; i < params->tau; ++i) {
         fprintf(stderr, " %u", decoded_chall_3[i]);
       }
       fprintf(stderr, "\n");
-#if defined(FAEST_SM4_DEBUG)
       vole_debug_reconstruct_like_from_commit(&bavc, decoded_chall_3, iv, ell_hat, params);
 #endif
     } else if (!decode_all_chall_3(decoded_chall_3, chall_3, params)) {

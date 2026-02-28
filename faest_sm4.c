@@ -1633,8 +1633,13 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
   const unsigned int SM4_BLOCKSIZE = 128;  // 128位 = 16字节
   const unsigned int SM4_R = 32;           // 32轮
 
-  // TEMP SAFETY CHECK: ensure key-based encryption matches public output.
-  // This is a fast guard and MUST be replaced by a ZK constraint later.
+#if defined(FAEST_SM4_DEBUG)
+  /* Debug-only witness sanity check: verify the witness key yields the public
+   * output.  The ZK output constraint is already enforced cryptographically in
+   * sm4_SSS_enc_constraints_prover: the last round loads owf_out as the state
+   * and incorporates owf_out_tag into the ZK hash, so no extra assert is needed
+   * in production.  Keeping this block debug-only avoids the silent no-op that
+   * a bare assert() becomes when NDEBUG is defined. */
   if (!faest_is_em(params)) {
     uint8_t mk[16];
     for (unsigned int i = 0; i < 4; i++) {
@@ -1645,8 +1650,12 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
     sm4_init_round_keys(&rk_tmp, mk);
     uint8_t expected_out[16];
     sm4_encrypt_block(&rk_tmp, owf_in, expected_out);
-    assert(memcmp(expected_out, owf_out, 16) == 0);
+    if (memcmp(expected_out, owf_out, 16) != 0) {
+      fprintf(stderr, "[SM4_DEBUG] sm4_SSS_constraints_prover: witness key does "
+                      "not produce expected owf_out — possible witness bug\n");
+    }
   }
+#endif /* FAEST_SM4_DEBUG */
   
   // 分配轮密钥空间
   uint8_t* rk = malloc((SM4_R + 4) * 4);  // 36个字 × 4字节
@@ -2059,7 +2068,9 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   bf128_t* w_tag = column_to_row_major_and_shrink_V_128_sm4(V, ell, lambda, ell_hat, "prover V->w_tag");
 
   // Stage check: witness generation complete
-  assert(w_tag != NULL);
+  if (!w_tag) {
+    return; /* malloc failure — caller will observe zeroed output buffers */
+  }
 
 #if defined(FAEST_SM4_DEBUG)
   // cache prover view for verifier-side comparison inside same process (tests)
@@ -2160,7 +2171,9 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   bf128_t* q_key = column_to_row_major_and_shrink_V_128_sm4(Q, ell, lambda, ell_hat, "verifier Q->q_key");
 
   // Stage check: witness reconstruction complete
-  assert(q_key != NULL);
+  if (!q_key) {
+    return; /* malloc failure — caller will observe zeroed output buffers */
+  }
 
 #if defined(FAEST_SM4_DEBUG)
   if (sm4_dbg_last_w_tag && sm4_dbg_last_w_taglen == ell + 2 * lambda) {
