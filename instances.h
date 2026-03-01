@@ -26,8 +26,10 @@ FAEST_BEGIN_C_DECL
 typedef enum faest_paramid_t {
   PARAMETER_SET_INVALID   = 0,
   FAEST_128S              = 1,
+  FAEST_EM_128S           = 2,
   FAEST_SM4_128S          = 5,
-  PARAMETER_SET_MAX_INDEX = 6
+  FAEST_EM_SM4_128S       = 6,
+  PARAMETER_SET_MAX_INDEX = 7
 } faest_paramid_t;
 
 typedef struct faest_paramset_t {

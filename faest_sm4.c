@@ -1460,27 +1460,56 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
   assert(out);
   assert(out_tag);
   
-  // 初始化输入（明文）
-  memcpy(in, owf_in, SM4_BLOCKSIZE / 8);
-  for (unsigned int i = 0; i < SM4_BLOCKSIZE; i++) {
-    in_tag[i] = bf128_zero();  // 公开输入，tag为0
+  const unsigned int Lke = params->Lke;
+
+  if (faest_is_em(params)) {
+    // EM模式：加密的轮密钥由公开的 owf_in 直接确定，无需 ZK 证明密钥扩展。
+    // 见证布局：[16字节 OWF Key (明文)] [加密见证]
+
+    // 从公开 owf_in 计算轮密钥
+    sm4_round_keys_t public_rk;
+    sm4_init_round_keys(&public_rk, owf_in);
+    // 填充 rk 数组（索引 4..35 存放 32 个轮密钥，大端字节序）
+    for (unsigned int i = 0; i < SM4_R; i++) {
+      sm4_uint32_to_bytes(public_rk.round_keys[i], rk + (i + 4) * 4);
+    }
+    // 轮密钥是公开的，其 VOLE tag 全为 0
+    memset(rk_tag, 0, (SM4_R + 4) * 32 * sizeof(bf128_t));
+
+    // 加密的 plaintext = w[0..16]（见证中存储的秘密 OWF key）
+    memcpy(in,     w,     SM4_BLOCKSIZE / 8);
+    memcpy(in_tag, w_tag, SM4_BLOCKSIZE * sizeof(bf128_t));
+
+    // 加密输出 = SM4_{owf_in}(owf_key) = owf_out XOR owf_key = owf_out XOR w[0..16]
+    for (unsigned int i = 0; i < SM4_BLOCKSIZE / 8; i++) {
+      out[i] = owf_out[i] ^ w[i];
+    }
+    // out = in XOR 公开常数，tag 不变
+    memcpy(out_tag, w_tag, SM4_BLOCKSIZE * sizeof(bf128_t));
+
+    // 只需加密约束，跳过密钥扩展约束
+    sm4_SSS_enc_constraints_prover(hasher, in, in_tag, out, out_tag,
+                                   w + Lke / 8, w_tag + Lke,
+                                   rk, rk_tag, params);
+  } else {
+    // 标准模式：输入/输出均为公开值，tag = 0
+    memcpy(in, owf_in, SM4_BLOCKSIZE / 8);
+    for (unsigned int i = 0; i < SM4_BLOCKSIZE; i++) {
+      in_tag[i] = bf128_zero();
+    }
+    memcpy(out, owf_out, SM4_BLOCKSIZE / 8);
+    for (unsigned int i = 0; i < SM4_BLOCKSIZE; i++) {
+      out_tag[i] = bf128_zero();
+    }
+
+    // ::1 密钥扩展约束
+    sm4_SSS_expkey_constraints_prover(hasher, rk, rk_tag, w, w_tag);
+
+    // ::2 加密约束
+    sm4_SSS_enc_constraints_prover(hasher, in, in_tag, out, out_tag,
+                                   w + Lke / 8, w_tag + Lke,
+                                   rk, rk_tag, params);
   }
-  
-  // 初始化输出（密文）
-  memcpy(out, owf_out, SM4_BLOCKSIZE / 8);
-  for (unsigned int i = 0; i < SM4_BLOCKSIZE; i++) {
-    out_tag[i] = bf128_zero();  // 公开输出，tag为0
-  }
-  
-  // ::1 密钥扩展约束
-  sm4_SSS_expkey_constraints_prover(hasher, rk, rk_tag, w, w_tag);
-  
-  // ::2 加密约束（32轮）
-  // w的布局：[MK:128位] [密钥扩展见证:32×32位] [加密见证:...]
-  const unsigned int Lke = params->Lke;  // 密钥扩展部分长度
-  sm4_SSS_enc_constraints_prover(hasher, in, in_tag, out, out_tag,
-                                 w + Lke / 8, w_tag + Lke,
-                                 rk, rk_tag, params);
   
   free(out_tag);
   free(out);
@@ -1509,27 +1538,57 @@ static void sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t*
   assert(in_key);
   assert(out_key);
   
-  // 初始化输入key（明文×delta）
-  for (unsigned int i = 0; i < SM4_BLOCKSIZE / 8; i++) {
-    for (unsigned int bit = 0; bit < 8; bit++) {
-      in_key[i * 8 + bit] = bf128_mul_bit(delta, (owf_in[i] >> bit) & 1);
-    }
-  }
-  
-  // 初始化输出key（密文×delta）
-  for (unsigned int i = 0; i < SM4_BLOCKSIZE / 8; i++) {
-    for (unsigned int bit = 0; bit < 8; bit++) {
-      out_key[i * 8 + bit] = bf128_mul_bit(delta, (owf_out[i] >> bit) & 1);
-    }
-  }
-  
-  // ::1 密钥扩展约束
-  sm4_SSS_expkey_constraints_verifier(hasher, rk_key, w_key, delta);
-  
-  // ::2 加密约束
   const unsigned int Lke = params->Lke;
-  sm4_SSS_enc_constraints_verifier(hasher, in_key, out_key, w_key + Lke,
-                                   rk_key, delta, params);
+
+  if (faest_is_em(params)) {
+    // EM模式：轮密钥由公开的 owf_in 直接确定
+    sm4_round_keys_t public_rk;
+    sm4_init_round_keys(&public_rk, owf_in);
+
+    // 填充 rk_key：轮密钥是公开的，verifier 用 delta × rk_bit 表示
+    memset(rk_key, 0, (SM4_R + 4) * 32 * sizeof(bf128_t));
+    for (unsigned int i = 0; i < SM4_R; i++) {
+      uint8_t rk_bytes[4];
+      sm4_uint32_to_bytes(public_rk.round_keys[i], rk_bytes);
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        for (unsigned int bit = 0; bit < 8; bit++) {
+          rk_key[(i + 4) * 32 + byte_i * 8 + bit] =
+              bf128_mul_bit(delta, (rk_bytes[byte_i] >> bit) & 1);
+        }
+      }
+    }
+
+    // in_key = w_key[0..128]（秘密明文的 VOLE key-shares）
+    memcpy(in_key, w_key, SM4_BLOCKSIZE * sizeof(bf128_t));
+
+    // out_key[i] = in_key[i] + delta * bit(owf_out, i)
+    //（因为 out = in XOR owf_out，owf_out 是公开常数）
+    for (unsigned int i = 0; i < SM4_BLOCKSIZE / 8; i++) {
+      for (unsigned int bit = 0; bit < 8; bit++) {
+        out_key[i * 8 + bit] = bf128_add(in_key[i * 8 + bit],
+                                          bf128_mul_bit(delta, (owf_out[i] >> bit) & 1));
+      }
+    }
+
+    // 跳过密钥扩展约束，只做加密约束
+    sm4_SSS_enc_constraints_verifier(hasher, in_key, out_key, w_key + Lke,
+                                     rk_key, delta, params);
+  } else {
+    // 标准模式
+    for (unsigned int i = 0; i < SM4_BLOCKSIZE / 8; i++) {
+      for (unsigned int bit = 0; bit < 8; bit++) {
+        in_key[i * 8 + bit]  = bf128_mul_bit(delta, (owf_in[i]  >> bit) & 1);
+        out_key[i * 8 + bit] = bf128_mul_bit(delta, (owf_out[i] >> bit) & 1);
+      }
+    }
+
+    // ::1 密钥扩展约束
+    sm4_SSS_expkey_constraints_verifier(hasher, rk_key, w_key, delta);
+
+    // ::2 加密约束
+    sm4_SSS_enc_constraints_verifier(hasher, in_key, out_key, w_key + Lke,
+                                     rk_key, delta, params);
+  }
   
   free(out_key);
   free(in_key);

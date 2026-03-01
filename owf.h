@@ -15,6 +15,7 @@ void owf_128(const uint8_t* key, const uint8_t* input, uint8_t* output);
 void owf_em_128(const uint8_t* key, const uint8_t* input, uint8_t* output);
 
 #define faest_128s_owf owf_128
+#define faest_em_128s_owf owf_em_128
 
 // Include SM4 OWF functions
 #include "owf_sm4.h"
