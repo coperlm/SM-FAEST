@@ -84,3 +84,14 @@ cd build && ninja clean
 meson setup build --buildtype=release
 cd build && ninja
 ```
+
+```
+# 方法一：Python 采集 + 表格
+python3 collect_bench.py benchmark_results.jsonl && python3 bench_table.py
+
+# 方法二：bash bench.sh 管道（原始 bench.sh 流）
+bash bench.sh 2>/dev/null | tee benchmark_results.jsonl | python3 bench_table.py
+
+# 方法三：比较多个历史记录
+python3 bench_table.py run_old.jsonl benchmark_results.jsonl
+```

@@ -111,7 +111,8 @@ int main() {
   name: 'compiler supports AVX2',
   args: [avx2_flag],
 )
-conf_data.set('HAVE_AVX2', supports_avx2)
+# PERMANENTLY DISABLED FOR FAIR AES vs SM4 COMPARISON
+conf_data.set('HAVE_AVX2', false)
 
 sse2_flag = cc.get_supported_arguments('-msse2')
 supports_loadu_si64 = cc.links(
