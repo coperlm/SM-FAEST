@@ -337,14 +337,15 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
     state[3] = new_word;
     
     if (round % 2 == 0) {
-      // 偶数轮（round=2,4,...,30）：记录完整状态（16字节）+ S-box 输入的逆范数（4字节）
-      for (int j = 0; j < 4; j++) {
-        sm4_uint32_to_bytes(state[j], w);
-        w += 4;
-      }
-      // 写入偶数轮 S-box 输入的逆范数（nibble 打包），用于 ZK 约束
+      // 偶数轮（round=2,4,...,30）：记录 S-box 输出（4字节）+ S-box 输入的逆范数（2字节 nibble）
+      // 用 sbox_out_even 代替 state，verifier 用 rolling window 重建状态
       uint8_t temp_bytes_even[4];
       sm4_uint32_to_bytes(temp, temp_bytes_even);
+      // S-box 输出：4 字节连续写入
+      for (int j = 0; j < 4; j++) {
+        *w++ = sm4_sbox(temp_bytes_even[j]);
+      }
+      // 逆范数 nibble 打包：2 字节
       for (int j = 0; j < 4; j += 2) {
         *w++ = (sm4_invnorm(temp_bytes_even[j]) & 0xf) | ((sm4_invnorm(temp_bytes_even[j + 1]) & 0xf) << 4);
       }
