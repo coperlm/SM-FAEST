@@ -276,16 +276,16 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       w += 4;
     }
 
-    // 记录每轮 S-box 输入的逆范数（4 字节），总计 32*4 = 128 字节
-    // 注意：invnorm 必须应用于 S-box 输入（类似 AES 在 sub_bytes 之前保存），而不是输出
+    // 记录每轮 S-box 输入的逆范数（nibble 打包：2个invnorm/字节，各取低4位）
+    // 每轮 4 个 invnorm → 2 字节（j=0,1 → byte[0]; j=2,3 → byte[1]）
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
       // X = K[i+1] ⊕ K[i+2] ⊕ K[i+3] ⊕ CK[i] = S-box 输入
       uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
 
       uint8_t x_bytes[4];
       sm4_uint32_to_bytes(x, x_bytes);  // S-box 输入（不是输出）
-      for (unsigned int j = 0; j < 4; ++j) {
-        *w++ = sm4_invnorm(x_bytes[j]);  // invnorm of S-box INPUT
+      for (unsigned int j = 0; j < 4; j += 2) {
+        *w++ = (sm4_invnorm(x_bytes[j]) & 0xf) | ((sm4_invnorm(x_bytes[j + 1]) & 0xf) << 4);
       }
     }
   } else {
@@ -316,10 +316,13 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
       uint8_t temp_bytes[4];
       sm4_uint32_to_bytes(temp, temp_bytes);
+      // sbox 输出：4 字节连续写入（不再与 invnorm 交错）
       for (int j = 0; j < 4; j++) {
-        uint8_t sbox_out = sm4_sbox(temp_bytes[j]);
-        *w++ = sbox_out;
-        *w++ = sm4_invnorm(temp_bytes[j]);  // invnorm of S-box INPUT (not output)
+        *w++ = sm4_sbox(temp_bytes[j]);
+      }
+      // invnorm nibble 打包：4 个 invnorm → 2 字节
+      for (int j = 0; j < 4; j += 2) {
+        *w++ = (sm4_invnorm(temp_bytes[j]) & 0xf) | ((sm4_invnorm(temp_bytes[j + 1]) & 0xf) << 4);
       }
     }
     
@@ -339,23 +342,23 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
         sm4_uint32_to_bytes(state[j], w);
         w += 4;
       }
-      // 写入偶数轮 S-box 输入（temp_bytes）的逆范数，用于 ZK 约束
+      // 写入偶数轮 S-box 输入的逆范数（nibble 打包），用于 ZK 约束
       uint8_t temp_bytes_even[4];
       sm4_uint32_to_bytes(temp, temp_bytes_even);
-      for (int j = 0; j < 4; j++) {
-        *w++ = sm4_invnorm(temp_bytes_even[j]);
+      for (int j = 0; j < 4; j += 2) {
+        *w++ = (sm4_invnorm(temp_bytes_even[j]) & 0xf) | ((sm4_invnorm(temp_bytes_even[j + 1]) & 0xf) << 4);
       }
     }
   }
 
-  // 最后的偶数轮 round=32（最后一对，状态是公开输出，只需记录 invnorm）
+  // 最后的偶数轮 round=32（最后一对，状态是公开输出，只需记录 invnorm，nibble 打包）
   // temp32 = state[1] ^ state[2] ^ state[3] ^ rk[31]
   {
     uint32_t temp32 = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[params->R - 1];
     uint8_t temp32_bytes[4];
     sm4_uint32_to_bytes(temp32, temp32_bytes);
-    for (int j = 0; j < 4; j++) {
-      *w++ = sm4_invnorm(temp32_bytes[j]);
+    for (int j = 0; j < 4; j += 2) {
+      *w++ = (sm4_invnorm(temp32_bytes[j]) & 0xf) | ((sm4_invnorm(temp32_bytes[j + 1]) & 0xf) << 4);
     }
   }
 
