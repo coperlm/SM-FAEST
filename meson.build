@@ -111,8 +111,9 @@ int main() {
   name: 'compiler supports AVX2',
   args: [avx2_flag],
 )
-# PERMANENTLY DISABLED FOR FAIR AES vs SM4 COMPARISON
-conf_data.set('HAVE_AVX2', false)
+
+conf_data.set('HAVE_AVX2', supports_avx2)
+
 
 sse2_flag = cc.get_supported_arguments('-msse2')
 supports_loadu_si64 = cc.links(
@@ -203,6 +204,9 @@ param_128s.set('OWF_OUTPUT_SIZE', 16)
 parameter_sets += param_128s
 
 # parameter set: FAEST-SM4-128s
+# ELL = Lke + Lenc = 2176 + 1024 = 3200
+# Lke = 128(init_key) + 1024(round_keys) + 1024(expkey 8-bit raw-inv) = 2176
+# Lenc = 32 rounds x 4 bytes x 8 bits = 1024 (full 8-bit inverse, degree-2)
 param_sm4_128s = configuration_data()
 param_sm4_128s.set('PARAM', 'SM4_128S')
 param_sm4_128s.set('PARAM_L', 'sm4_128s')
@@ -210,15 +214,15 @@ param_sm4_128s.set('LAMBDA', 128)
 param_sm4_128s.set('Nst', 4)
 param_sm4_128s.set('Ske', 128)
 param_sm4_128s.set('R', 32)
-param_sm4_128s.set('Senc', 124)
+param_sm4_128s.set('Senc', 128)
 param_sm4_128s.set('BETA', 1)
-param_sm4_128s.set('ELL', 3168)
-param_sm4_128s.set('Lke', 1664)
-param_sm4_128s.set('Lenc', 1504)
+param_sm4_128s.set('ELL', 3200)
+param_sm4_128s.set('Lke', 2176)
+param_sm4_128s.set('Lenc', 1024)
 param_sm4_128s.set('TAU', 11)
 param_sm4_128s.set('W_GRIND', 7)
 param_sm4_128s.set('T_OPEN', 102)
-param_sm4_128s.set('SIG_SIZE', 7102)
+param_sm4_128s.set('SIG_SIZE', 7146)
 param_sm4_128s.set('PK_SIZE', 32)
 param_sm4_128s.set('SK_SIZE', 32)
 param_sm4_128s.set('OWF_INPUT_SIZE', 16)
@@ -249,6 +253,8 @@ param_em_128s.set('OWF_OUTPUT_SIZE', 16)
 parameter_sets += param_em_128s
 
 # parameter set: FAEST-EM-SM4-128s (SM4 Even-Mansour, no key schedule)
+# ELL = Lke + Lenc = 128 + 1024 = 1152
+# Lenc = 32 rounds x 4 bytes x 8 bits = 1024 (full 8-bit inverse, degree-2)
 param_em_sm4_128s = configuration_data()
 param_em_sm4_128s.set('PARAM', 'EM_SM4_128S')
 param_em_sm4_128s.set('PARAM_L', 'em_sm4_128s')
@@ -256,11 +262,11 @@ param_em_sm4_128s.set('LAMBDA', 128)
 param_em_sm4_128s.set('Nst', 4)
 param_em_sm4_128s.set('Ske', 0)
 param_em_sm4_128s.set('R', 32)
-param_em_sm4_128s.set('Senc', 124)
+param_em_sm4_128s.set('Senc', 128)
 param_em_sm4_128s.set('BETA', 1)
-param_em_sm4_128s.set('ELL', 1632)
+param_em_sm4_128s.set('ELL', 1152)
 param_em_sm4_128s.set('Lke', 128)
-param_em_sm4_128s.set('Lenc', 1504)
+param_em_sm4_128s.set('Lenc', 1024)
 param_em_sm4_128s.set('TAU', 11)
 param_em_sm4_128s.set('W_GRIND', 7)
 param_em_sm4_128s.set('T_OPEN', 102)

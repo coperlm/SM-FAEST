@@ -530,6 +530,119 @@ static void sm4_SSS_inv_norm_constraints_verifier(zk_hash_128_ctx* hasher,
 }
 
 // ============================================================================
+// Phase 2b: Full 8-bit Degree-2 S-box Constraints
+// 使用完整8位逆元约束替代invnorm：x²y = x 且 xy² = y
+// 见证 y = x^{-1} in SM4 GF(2^8)
+// ============================================================================
+
+/**
+ * 对8位GF(2^8)元素的值和标签施加平方运算
+ * 在 SM4 的 GF(2^8) 中，平方 = Frobenius 自同态
+ * 对标签应用 sm4_sq_bit_inplace（线性映射）
+ */
+static void sm4_SSS_sq_byte_prover(uint8_t* x_sq_val, bf128_t* x_sq_tag,
+                                   uint8_t x_val, const bf128_t* x_tag) {
+  *x_sq_val = bf8_square_sm4(x_val);
+  memcpy(x_sq_tag, x_tag, 8 * sizeof(bf128_t));
+  sm4_sq_bit_inplace(x_sq_tag);
+}
+
+/**
+ * 完整8位 S-box 的 Degree-2 约束（Prover 版本）
+ * x = S-box 输入（8位），y = 见证 = x^{-1} in SM4 GF(2^8)
+ * 约束1: x²·y + x = 0  (在 GF(2^128) 嵌入中)
+ * 约束2: x·y² + y = 0
+ *
+ * VOLE Δ-展开：f(Q_A, Q_B, Q_C) = Q_A·Q_B + Q_C，其中 A=x², B=y, C=x
+ *   Δ^0 系数 c0 = V_A·V_B + V_C          → v_0（a0贡献）
+ *   Δ^1 系数 c1 = w_A·V_B + V_A·w_B + w_C  → v_1（a1贡献）
+ *   Δ^2 系数 c2 = w_A·w_B                  → v_2（a2贡献，正确见证=w_C≠0）
+ * 调用：zk_hash_128_3_update(hasher, c0, c1, c2)
+ */
+static void sm4_SSS_full_sbox_prover(zk_hash_128_3_ctx* hasher,
+                                     uint8_t x_val, const bf128_t* x_tag,  // 8 bits, S-box input
+                                     uint8_t y_val, const bf128_t* y_tag) {// 8 bits, raw inverse
+  // 嵌入 GF(2^128)
+  bf128_t X_val = sm4_byte_combine_bits(x_val);
+  bf128_t X_tag = sm4_byte_combine(x_tag);
+  bf128_t Y_val = sm4_byte_combine_bits(y_val);
+  bf128_t Y_tag = sm4_byte_combine(y_tag);
+
+  // 计算 x² 和 y² 的值和标签（Frobenius平方）
+  uint8_t x_sq_val;
+  bf128_t x_sq_tag[8];
+  sm4_SSS_sq_byte_prover(&x_sq_val, x_sq_tag, x_val, x_tag);
+  bf128_t X_sq_val = sm4_byte_combine_bits(x_sq_val);
+  bf128_t X_sq_tag = sm4_byte_combine(x_sq_tag);
+
+  uint8_t y_sq_val;
+  bf128_t y_sq_tag[8];
+  sm4_SSS_sq_byte_prover(&y_sq_val, y_sq_tag, y_val, y_tag);
+  bf128_t Y_sq_val = sm4_byte_combine_bits(y_sq_val);
+  bf128_t Y_sq_tag = sm4_byte_combine(y_sq_tag);
+
+  // 约束1: X_sq·Y + X = 0  (A=X_sq, B=Y, C=X)
+  {
+    bf128_t c0 = bf128_add(bf128_mul(X_sq_tag, Y_tag), X_tag);
+    bf128_t c1 = bf128_add(
+        bf128_add(bf128_mul(X_sq_val, Y_tag), bf128_mul(X_sq_tag, Y_val)),
+        X_val);
+    bf128_t c2 = bf128_mul(X_sq_val, Y_val);
+    zk_hash_128_3_update(hasher, c0, c1, c2);
+#if defined(DEBUG_SM4_CONSTRAINTS)
+    static unsigned int _call_count = 0;
+    if (_call_count < 4) {
+      uint8_t _b0[16],_b1[16],_b2[16];
+      bf128_store(_b0,c0); bf128_store(_b1,c1); bf128_store(_b2,c2);
+      fprintf(stderr,"[PROVER] call#%u c0=%02x%02x c1=%02x%02x c2=%02x%02x x=%02x y=%02x\n",
+              _call_count, _b0[0],_b0[1], _b1[0],_b1[1], _b2[0],_b2[1], x_val, y_val);
+    }
+    _call_count++;
+#endif
+  }
+
+  // 约束2: X·Y_sq + Y = 0  (A=X, B=Y_sq, C=Y)
+  {
+    bf128_t c0 = bf128_add(bf128_mul(X_tag, Y_sq_tag), Y_tag);
+    bf128_t c1 = bf128_add(
+        bf128_add(bf128_mul(X_val, Y_sq_tag), bf128_mul(X_tag, Y_sq_val)),
+        Y_val);
+    bf128_t c2 = bf128_mul(X_val, Y_sq_val);
+    zk_hash_128_3_update(hasher, c0, c1, c2);
+  }
+}
+
+/**
+ * 完整8位 S-box 的 Degree-2 约束（Verifier 版本）
+ * x_eval_bits[8] 和 y_eval_bits[8] 是 GF(2^128) 求值份额（每位一个元素）
+ * 验证者计算两个 degree-2 约束的求值并提交给 hasher
+ */
+static void sm4_SSS_full_sbox_verifier(zk_hash_128_ctx* hasher,
+                                       const bf128_t* x_eval_bits,   // 8 bf128_t
+                                       const bf128_t* y_eval_bits) { // 8 bf128_t
+  // 嵌入 GF(2^128)
+  bf128_t X_eval = sm4_byte_combine(x_eval_bits);
+  bf128_t Y_eval = sm4_byte_combine(y_eval_bits);
+
+  // 平方：对位级求值份额应用平方映射
+  bf128_t x_sq_eval_bits[8];
+  memcpy(x_sq_eval_bits, x_eval_bits, 8 * sizeof(bf128_t));
+  sm4_sq_bit_inplace(x_sq_eval_bits);
+  bf128_t X_sq_eval = sm4_byte_combine(x_sq_eval_bits);
+
+  bf128_t y_sq_eval_bits[8];
+  memcpy(y_sq_eval_bits, y_eval_bits, 8 * sizeof(bf128_t));
+  sm4_sq_bit_inplace(y_sq_eval_bits);
+  bf128_t Y_sq_eval = sm4_byte_combine(y_sq_eval_bits);
+
+  // 约束1: X_sq·Y + X = 0 at Δ
+  zk_hash_128_update(hasher, bf128_add(bf128_mul(X_sq_eval, Y_eval), X_eval));
+
+  // 约束2: X·Y_sq + Y = 0 at Δ
+  zk_hash_128_update(hasher, bf128_add(bf128_mul(X_eval, Y_sq_eval), Y_eval));
+}
+
+// ============================================================================
 // Phase 3: Linear Transformations (L and L')
 // ============================================================================
 
@@ -996,112 +1109,79 @@ static void sm4_SSS_expkey_constraints_prover(zk_hash_128_3_ctx* hasher, uint8_t
                                               const uint8_t* w, const bf128_t* w_tag) {
   const unsigned int SM4_R = 32;
   const unsigned int KEY_BITS = (SM4_R + 4) * 32;
-  const uint8_t* inv_block = w + KEY_BITS / 8;
-  const bf128_t* inv_block_tag = w_tag + KEY_BITS;
+  // 新布局：inv_block 存储 32轮×4字节 的原始逆元（8位/字节，不再nibble打包）
+  const uint8_t*  inv_block     = w     + KEY_BITS / 8;  // raw inverse block，每轮4字节
+  const bf128_t* inv_block_tag  = w_tag + KEY_BITS;       // 每轮32位标签
+
   // ::1 向前传播生成轮密钥
   sm4_SSS_keyexp_forward_prover(rk, rk_tag, w, w_tag);
 
-  // ::2-5 对每轮S盒约束
+  // ::2-5 对每轮S盒约束（degree-2全8位约束）
   for (unsigned int i = 0; i < SM4_R; i++) {
     uint8_t ck_bytes[4];
     sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
 
-    uint8_t x_bytes[4];
-    bf128_t x_tag[32];
-    uint8_t tprime_out[4];
-    bf128_t tprime_tag[32];
+    uint8_t  x_bytes[4];
+    bf128_t  x_tag[32];
 
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+      // S-box 输入 x = rk[i+1] ⊕ rk[i+2] ⊕ rk[i+3] ⊕ CK[i]
       x_bytes[byte_i] = rk[(i + 1) * 4 + byte_i] ^ rk[(i + 2) * 4 + byte_i] ^
                         rk[(i + 3) * 4 + byte_i] ^ ck_bytes[byte_i];
-      tprime_out[byte_i] = rk[(i + 4) * 4 + byte_i] ^ rk[i * 4 + byte_i];
-
       for (unsigned int bit = 0; bit < 8; bit++) {
         unsigned int idx = byte_i * 8 + bit;
         x_tag[idx] = bf128_add(
             bf128_add(rk_tag[(i + 1) * 32 + idx], rk_tag[(i + 2) * 32 + idx]),
             rk_tag[(i + 3) * 32 + idx]);
-        tprime_tag[idx] = bf128_add(rk_tag[(i + 4) * 32 + idx], rk_tag[i * 32 + idx]);
+        // CK 是公开常数，标签贡献为0（verifier侧加 delta*ck_bit）
       }
     }
 
-    uint8_t tau_bytes[4];
-    bf128_t tau_tag[32];
-    sm4_SSS_linear_l_prime_inv_prover(tau_bytes, tau_tag, tprime_out, tprime_tag);
-
+    // 从见证读取原始逆元 y = x^{-1}，应用 degree-2 约束
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-      // nibble 打包：2 个 invnorm 共用 1 字节
-      uint8_t inv_norm = (inv_block[i * 2 + byte_i / 2] >> ((byte_i % 2) * 4)) & 0xf;
-      bf128_t inv_norm_tag[4];
-      for (unsigned int bit = 0; bit < 4; ++bit) {
-        inv_norm_tag[bit] = inv_block_tag[i * 16 + byte_i * 4 + bit];
-      }
-
-
-      bf128_t y[4];
-      bf128_t y_tag[4];
-      sm4_SSS_inv_norm_to_conjugates_prover(y, y_tag, inv_norm, inv_norm_tag);
-
-      bf128_t conj[8];
-      bf128_t conj_tag[8];
-      sm4_SSS_f256_f2_conjugates_1_byte(conj, x_bytes[byte_i]);
-      sm4_SSS_f256_f2_conjugates_SSS_byte(conj_tag, x_tag + byte_i * 8);
-
-      sm4_SSS_inv_norm_constraints_prover(hasher, conj, conj_tag, y, y_tag);
+      uint8_t        y_val = inv_block[i * 4 + byte_i];
+      const bf128_t* y_tag = inv_block_tag + i * 32 + byte_i * 8;
+      sm4_SSS_full_sbox_prover(hasher, x_bytes[byte_i], x_tag + byte_i * 8, y_val, y_tag);
     }
   }
 }
 
 /**
- * SM4 密钥扩展约束验证 (Verifier版本)
+ * SM4 密钥扩展约束验证 (Verifier版本) — 全8位degree-2约束
  */
 static void sm4_SSS_expkey_constraints_verifier(zk_hash_128_ctx* hasher, bf128_t* rk_key,
                                                 const bf128_t* w_key, bf128_t delta) {
   const unsigned int SM4_R = 32;
   const unsigned int KEY_BITS = (SM4_R + 4) * 32;
+  // 新布局：inv_block_key 紧接在 KEY_BITS 位之后，每轮32位（4字节×8位）
   const bf128_t* inv_block_key = w_key + KEY_BITS;
+
   // ::1 向前传播
   sm4_SSS_keyexp_forward_verifier(rk_key, w_key);
 
-  // ::2-5 验证每轮S盒约束
+  // ::2-5 验证每轮S盒约束（degree-2全8位）
   for (unsigned int i = 0; i < SM4_R; i++) {
     uint8_t ck_bytes[4];
     sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
 
     bf128_t x_key[32];
-    bf128_t tprime_key[32];
-
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
       for (unsigned int bit = 0; bit < 8; bit++) {
         unsigned int idx = byte_i * 8 + bit;
         x_key[idx] = bf128_add(
             bf128_add(rk_key[(i + 1) * 32 + idx], rk_key[(i + 2) * 32 + idx]),
             rk_key[(i + 3) * 32 + idx]);
+        // CK 是公开常数，verifier 加 delta * bit
         if ((ck_bytes[byte_i] >> bit) & 1) {
           x_key[idx] = bf128_add(x_key[idx], delta);
         }
-
-        tprime_key[idx] = bf128_add(rk_key[(i + 4) * 32 + idx], rk_key[i * 32 + idx]);
       }
     }
 
-    bf128_t tau_key[32];
-    sm4_SSS_linear_l_prime_inv_verifier(tau_key, tprime_key);
-
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-      // nibble 打包：2 个 invnorm 共用 1 字节
-      bf128_t inv_norm_key[4];
-      for (unsigned int bit = 0; bit < 4; ++bit) {
-        inv_norm_key[bit] = inv_block_key[i * 16 + byte_i * 4 + bit];
-      }
-
-      bf128_t y_key[4];
-      sm4_SSS_inv_norm_to_conjugates_verifier(y_key, inv_norm_key);
-
-      bf128_t conj_key[8];
-      sm4_SSS_f256_f2_conjugates_SSS_byte(conj_key, x_key + byte_i * 8);
-
-      sm4_SSS_inv_norm_constraints_verifier(hasher, conj_key, y_key, delta);
+      const bf128_t* x_eval = x_key + byte_i * 8;
+      const bf128_t* y_eval = inv_block_key + i * 32 + byte_i * 8;
+      sm4_SSS_full_sbox_verifier(hasher, x_eval, y_eval);
     }
   }
 }
@@ -1110,159 +1190,144 @@ static void sm4_SSS_expkey_constraints_verifier(zk_hash_128_ctx* hasher, bf128_t
 // Phase 5: Feistel轮函数约束（加密）
 // ============================================================================
 
+/**
+ * SM4 加密约束 (Prover版本) — 全8位degree-2约束
+ * 见证布局（新）：每轮4字节原始逆元，32轮×4字节=128字节=1024位
+ * pair_bytes=8：[0..3]=奇数轮raw_inv, [4..7]=偶数轮raw_inv
+ */
 static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
                                            const uint8_t* owf_in, const bf128_t* owf_in_tag,
                                            const uint8_t* owf_out, const bf128_t* owf_out_tag,
                                            const uint8_t* w, const bf128_t* w_tag,
                                            const uint8_t* rk, const bf128_t* rk_tag,
                                            const faest_paramset_t* params) {
-  (void)params; // Unused parameter
+  (void)params;
+  (void)owf_out;
+  (void)owf_out_tag;
   const unsigned int SM4_R = 32;
   const unsigned int Nbytes = 16;
-  const unsigned int Nbits = 128;
-  
-  // 当前状态（滚动窗口：4个字）
-  uint8_t state[16];
-  bf128_t state_tag[128];
-  
-  // ::1 初始化状态从输入明文
-  memcpy(state, owf_in, Nbytes);
+  const unsigned int Nbits  = 128;
+
+  // 滚动窗口状态
+  uint8_t  state[16];
+  bf128_t  state_tag[128];
+  memcpy(state,     owf_in,     Nbytes);
   memcpy(state_tag, owf_in_tag, Nbits * sizeof(bf128_t));
-  
-  // ::2 每次迭代处理2轮（奇数轮+偶数轮）
+
+  // 新见证布局：每对(奇+偶)轮 pair_bytes=8（去掉sbox_out存储，去掉invnorm nibble）
+  const unsigned int pair_bytes = 8;
+
   for (unsigned int r_pair = 0; r_pair < SM4_R / 2; r_pair++) {
-    unsigned int r_odd = r_pair * 2 + 1;   // 奇数轮：1,3,5,...,31
-    unsigned int r_even = r_pair * 2 + 2;  // 偶数轮：2,4,6,...,32
-    
-    // ========== 奇数轮：生成 S-box 约束（通过 inv*temp=1） ==========
-    // ::3 计算 temp = state[1] ⊕ state[2] ⊕ state[3] ⊕ rk[round_idx]
-    // SM4算法：每轮使用rk[i]，i从0开始
-    // rk数组：rk[0..3]是初始密钥(MK^FK)，rk[4..35]是32个轮密钥
-    unsigned int round_idx = r_odd - 1;  // 轮索引从0开始，所以r_odd=1对应rk[4]
-    
-    uint8_t temp_odd[4];
-    bf128_t temp_odd_tag[32];
-    
+    unsigned int r_odd  = r_pair * 2 + 1;
+    unsigned int r_even = r_pair * 2 + 2;
+
+    const unsigned int base_bytes = r_pair * pair_bytes;
+    const uint8_t*  sbox_bytes = w     + base_bytes;
+    const bf128_t*  sbox_tags  = w_tag + base_bytes * 8;
+
+    // ========== 奇数轮 ==========
+    unsigned int round_idx = r_odd - 1;
+
+    uint8_t  temp_odd[4];
+    bf128_t  temp_odd_tag[32];
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
       temp_odd[byte_i] = state[4 + byte_i] ^ state[8 + byte_i] ^
                          state[12 + byte_i] ^ rk[(round_idx + 4) * 4 + byte_i];
-      
       for (unsigned int bit = 0; bit < 8; bit++) {
         temp_odd_tag[byte_i * 8 + bit] = bf128_add(
             bf128_add(state_tag[32 + byte_i * 8 + bit], state_tag[64 + byte_i * 8 + bit]),
-            bf128_add(state_tag[96 + byte_i * 8 + bit], rk_tag[(round_idx + 4) * 32 + byte_i * 8 + bit]));
+            bf128_add(state_tag[96 + byte_i * 8 + bit],
+                      rk_tag[(round_idx + 4) * 32 + byte_i * 8 + bit]));
       }
     }
-    
-    // ::4 从见证读取4个字节的 S-box 输出（奇数轮专有）
-    // Witness布局：8字节(sbox+invnorm) + 16字节state + 4字节偶数轮invnorm = 28字节/对
-    // 最后一对（r_pair=15, r_even=32使用公开输出）只有8字节
-    // pair_bytes=12: [0..3]=odd_sbox [4..5]=odd_inv [6..9]=even_sbox [10..11]=even_inv
-    // last pair (r_even=SM4_R): [0..3]=odd_sbox [4..5]=odd_inv [6..7]=even_inv (8 bytes)
-    const unsigned int pair_bytes = 12;  // 4 sbox + 2 inv(nibble) + 4 sbox_even + 2 inv_even(nibble)
-    const unsigned int base_bytes = r_pair * pair_bytes;
-    const unsigned int base_bits = base_bytes * 8;
-    const uint8_t* sbox_bytes = w + base_bytes;
-    const bf128_t* sbox_tags = w_tag + base_bits;
 
-    uint8_t sbox_out_odd[4];
-    bf128_t sbox_out_odd_tag[32];
-
+    uint8_t  sbox_out_odd[4];
+    bf128_t  sbox_out_odd_tag[32];
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-      // sbox 连续排列（匹配 sm4.c 新布局：[sbox0][sbox1][sbox2][sbox3][pack01][pack23]）
-      uint8_t sbox_val = sbox_bytes[byte_i];
-      // invnorm nibble 打包：j=0→1共享一个字节
-      uint8_t inv_val = (sbox_bytes[4 + byte_i / 2] >> ((byte_i % 2) * 4)) & 0xf;
-      const bf128_t* sbox_tag = sbox_tags + byte_i * 8;        // 8 bits 每个 sbox 字节
-      const bf128_t* inv_tag  = sbox_tags + 32 + byte_i * 4;   // 4 bits 每个 invnorm（nibble）
+      // 见证：y = x^{-1} in SM4 GF(2^8)（原始逆元，8位）
+      uint8_t        y_val = sbox_bytes[byte_i];
+      const bf128_t* y_tag = sbox_tags + byte_i * 8;
 
-      // ::6 生成 inv * temp == 1 约束（通过共轭多项式）
-      bf128_t y[4];
-      bf128_t y_tag[4];
-      sm4_SSS_inv_norm_to_conjugates_prover(y, y_tag, inv_val, inv_tag);
+      // Degree-2 约束：x²y=x AND xy²=y
+      sm4_SSS_full_sbox_prover(hasher,
+                               temp_odd[byte_i], temp_odd_tag + byte_i * 8,
+                               y_val, y_tag);
 
-      bf128_t conj[8];
-      bf128_t conj_tag[8];
-      sm4_SSS_f256_f2_conjugates_1_byte(conj, temp_odd[byte_i]);
-      sm4_SSS_f256_f2_conjugates_SSS_byte(conj_tag, temp_odd_tag + byte_i * 8);
-      sm4_SSS_inv_norm_constraints_prover(hasher, conj, conj_tag, y, y_tag);
-
-      // ::7 直接使用 witness 的 S-box 输出
-      sbox_out_odd[byte_i] = sbox_val;
-      memcpy(&sbox_out_odd_tag[byte_i * 8], sbox_tag, 8 * sizeof(bf128_t));
+      // 从原始逆元计算 sbox_out = affine(y)，用于滚动状态更新
+      uint8_t  soe_val;
+      bf128_t  soe_tag[8];
+      sm4_SSS_affine_forward_prover(&soe_val, soe_tag, &y_val, y_tag);
+      sbox_out_odd[byte_i] = soe_val;
+      memcpy(&sbox_out_odd_tag[byte_i * 8], soe_tag, 8 * sizeof(bf128_t));
     }
-    
-    // ::9 应用线性变换L
-    uint8_t L_out_odd[4];
-    bf128_t L_out_odd_tag[32];
+
+    // 应用线性变换L并更新状态
+    uint8_t  L_out_odd[4];
+    bf128_t  L_out_odd_tag[32];
     sm4_SSS_linear_l_prover(L_out_odd, L_out_odd_tag, sbox_out_odd, sbox_out_odd_tag);
-    
-    // ::10 计算新字 = state[0] ⊕ L(τ(temp))
-    uint8_t new_word_odd[4];
-    bf128_t new_word_odd_tag[32];
+
+    uint8_t  new_word_odd[4];
+    bf128_t  new_word_odd_tag[32];
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
       new_word_odd[byte_i] = state[byte_i] ^ L_out_odd[byte_i];
-      
       for (unsigned int bit = 0; bit < 8; bit++) {
         new_word_odd_tag[byte_i * 8 + bit] =
             bf128_add(state_tag[byte_i * 8 + bit], L_out_odd_tag[byte_i * 8 + bit]);
       }
     }
-    
-    // ::11 更新状态（滚动移位）: state = [state[1], state[2], state[3], new_word]
-    memmove(state, state + 4, 12);
-    memcpy(state + 12, new_word_odd, 4);
-    memmove(state_tag, state_tag + 32, 96 * sizeof(bf128_t));
-    memcpy(state_tag + 96, new_word_odd_tag, 32 * sizeof(bf128_t));
-    
-    // ========== 偶数轮：使用状态见证生成S盒约束 ==========
-    if (r_even <= SM4_R) {  // 第32轮使用公开输出作为状态
-      // ::12 计算 temp = state[1] ⊕ state[2] ⊕ state[3] ⊕ rk[round_idx]
+    memmove(state,        state + 4,           12);
+    memcpy (state + 12,   new_word_odd,        4);
+    memmove(state_tag,    state_tag + 32,      96 * sizeof(bf128_t));
+    memcpy (state_tag + 96, new_word_odd_tag, 32 * sizeof(bf128_t));
+
+    // ========== 偶数轮 ==========
+    if (r_even <= SM4_R) {
       unsigned int round_idx_even = r_even - 1;
 
-      uint8_t temp_even[4];
-      bf128_t temp_even_tag[32];
-
+      uint8_t  temp_even[4];
+      bf128_t  temp_even_tag[32];
       for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
         temp_even[byte_i] = state[4 + byte_i] ^ state[8 + byte_i] ^
                             state[12 + byte_i] ^ rk[(round_idx_even + 4) * 4 + byte_i];
-
         for (unsigned int bit = 0; bit < 8; bit++) {
           temp_even_tag[byte_i * 8 + bit] = bf128_add(
               bf128_add(state_tag[32 + byte_i * 8 + bit], state_tag[64 + byte_i * 8 + bit]),
-              bf128_add(state_tag[96 + byte_i * 8 + bit], rk_tag[(round_idx_even + 4) * 32 + byte_i * 8 + bit]));
+              bf128_add(state_tag[96 + byte_i * 8 + bit],
+                        rk_tag[(round_idx_even + 4) * 32 + byte_i * 8 + bit]));
         }
       }
 
-      // ::13 偶数轮从witness读取完整状态（普通对）；第32轮改用公开输出
-      // Witness布局：每对轮28字节（8字节sbox/inv + 16字节state + 4字节偶数轮invnorm）
-      // 最后一对（r_even=SM4_R）：8字节sbox/inv + 4字节偶数轮invnorm（无state）
-      // Rolling window optimization: replace state_witness with sbox_out_even
-      // New layout per pair: [0..3]=odd_sbox [4..5]=odd_inv [6..9]=even_sbox [10..11]=even_inv
-      // Last pair (r_even=SM4_R): [6..7]=even_inv only (state=public output)
-      const uint8_t* inv_even_witness = NULL;
-      const bf128_t* inv_even_witness_tag = NULL;
-      if (r_pair < SM4_R / 2 - 1) {
-        // Normal even round: read sbox_out_even from witness, do rolling state update
-        const uint8_t* sbox_out_even_witness = sbox_bytes + 6;  // bytes 6-9
-        const bf128_t* sbox_out_even_tag_ptr = sbox_tags + 48; // bits 48-79
+      // 偶数轮见证在 bytes 4..7，bits 32..63
+      const uint8_t*  y_even_bytes = sbox_bytes + 4;
+      const bf128_t*  y_even_tags  = sbox_tags  + 32;
 
-        uint8_t sbox_out_even_bytes[4];
-        bf128_t sbox_out_even_tag_bits[32];
-        for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-          sbox_out_even_bytes[byte_i] = sbox_out_even_witness[byte_i];
-          memcpy(&sbox_out_even_tag_bits[byte_i * 8],
-                 sbox_out_even_tag_ptr + byte_i * 8, 8 * sizeof(bf128_t));
+      uint8_t  sbox_out_even[4];
+      bf128_t  sbox_out_even_tag[32];
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        uint8_t        y_e_val = y_even_bytes[byte_i];
+        const bf128_t* y_e_tag = y_even_tags + byte_i * 8;
+
+        sm4_SSS_full_sbox_prover(hasher,
+                                 temp_even[byte_i], temp_even_tag + byte_i * 8,
+                                 y_e_val, y_e_tag);
+
+        // 仅非末轮需要计算 sbox_out_even 以更新滚动状态
+        if (r_even < SM4_R) {
+          uint8_t  soe_val;
+          bf128_t  soe_tag[8];
+          sm4_SSS_affine_forward_prover(&soe_val, soe_tag, &y_e_val, y_e_tag);
+          sbox_out_even[byte_i] = soe_val;
+          memcpy(&sbox_out_even_tag[byte_i * 8], soe_tag, 8 * sizeof(bf128_t));
         }
+      }
 
-        // Apply L transform and rolling state update
-        uint8_t L_out_even[4];
-        bf128_t L_out_even_tag[32];
-        sm4_SSS_linear_l_prover(L_out_even, L_out_even_tag,
-                                sbox_out_even_bytes, sbox_out_even_tag_bits);
+      if (r_even < SM4_R) {
+        uint8_t  L_out_even[4];
+        bf128_t  L_out_even_tag[32];
+        sm4_SSS_linear_l_prover(L_out_even, L_out_even_tag, sbox_out_even, sbox_out_even_tag);
 
-        uint8_t new_word_even[4];
-        bf128_t new_word_even_tag[32];
+        uint8_t  new_word_even[4];
+        bf128_t  new_word_even_tag[32];
         for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
           new_word_even[byte_i] = state[byte_i] ^ L_out_even[byte_i];
           for (unsigned int bit = 0; bit < 8; bit++) {
@@ -1270,55 +1335,19 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
                 bf128_add(state_tag[byte_i * 8 + bit], L_out_even_tag[byte_i * 8 + bit]);
           }
         }
-        memmove(state, state + 4, 12);
-        memcpy(state + 12, new_word_even, 4);
-        memmove(state_tag, state_tag + 32, 96 * sizeof(bf128_t));
-        memcpy(state_tag + 96, new_word_even_tag, 32 * sizeof(bf128_t));
-
-        inv_even_witness     = sbox_bytes + 10;  // bytes 10-11
-        inv_even_witness_tag = sbox_tags  + 80;  // bits  80-95
+        memmove(state,          state + 4,             12);
+        memcpy (state + 12,     new_word_even,         4);
+        memmove(state_tag,      state_tag + 32,        96 * sizeof(bf128_t));
+        memcpy (state_tag + 96, new_word_even_tag,     32 * sizeof(bf128_t));
       }
-      if (r_even == SM4_R) {
-        // Last even round: state = public output (no rolling needed here)
-        // invnorm right after odd 6 bytes
-        inv_even_witness     = sbox_bytes + 6;
-        inv_even_witness_tag = sbox_tags  + 48;
-      }
-
-      // ::14 从witness读取偶数轮invnorm（nibble打包：2个invnorm/字节）
-      uint8_t inv_norm_even[4];
-      bf128_t inv_norm_even_tag[16];
-      for (unsigned int byte_i = 0; byte_i < 4; ++byte_i) {
-        inv_norm_even[byte_i] = (inv_even_witness[byte_i / 2] >> ((byte_i % 2) * 4)) & 0xf;
-        for (unsigned int bit = 0; bit < 4; ++bit) {
-          inv_norm_even_tag[byte_i * 4 + bit] = inv_even_witness_tag[byte_i * 4 + bit];
-        }
-      }
-
-      // ::16 生成逆范数约束（偶数轮）
-      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-        bf128_t y[4];
-        bf128_t y_tag[4];
-        sm4_SSS_inv_norm_to_conjugates_prover(y, y_tag, inv_norm_even[byte_i],
-                                              inv_norm_even_tag + byte_i * 4);
-
-        bf128_t conj[8];
-        bf128_t conj_tag[8];
-        sm4_SSS_f256_f2_conjugates_1_byte(conj, temp_even[byte_i]);
-        sm4_SSS_f256_f2_conjugates_SSS_byte(conj_tag, temp_even_tag + byte_i * 8);
-
-        sm4_SSS_inv_norm_constraints_prover(hasher, conj, conj_tag, y, y_tag);
-      }
+      // r_even == SM4_R: 输出状态为公开值，约束已隐含于最终一致性检查中
     }
   }
-
-  // TEMP SAFETY CHECK MOVED: handled at the top-level constraints using the secret key.
-  (void)owf_out_tag;
 }
 
 /**
- * SM4 加密约束 (Verifier版本)
- * 验证32轮Feistel结构，按AES风格每次处理2轮（奇+偶）
+ * SM4 加密约束 (Verifier版本) — 全8位degree-2约束
+ * 见证布局（新）：pair_bytes=8，[0..3]=奇数轮raw_inv key-shares, [4..7]=偶数轮
  */
 static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
                                              const bf128_t* owf_in_key,
@@ -1327,92 +1356,86 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
                                              const bf128_t* rk_key,
                                              bf128_t delta,
                                              const faest_paramset_t* params) {
-  (void)params; // Unused parameter
+  (void)params;
+  (void)owf_out_key;
   const unsigned int SM4_R = 32;
   const unsigned int Nbits = 128;
-  
-  // 当前状态key（滚动窗口：4个字）
+
   bf128_t state_key[128];
-  
-  // ::1 初始化从输入key
   memcpy(state_key, owf_in_key, Nbits * sizeof(bf128_t));
-  
-  // ::2 每次迭代处理2轮（奇数轮+偶数轮）
+
+  const unsigned int pair_bytes = 8;
+
   for (unsigned int r_pair = 0; r_pair < SM4_R / 2; r_pair++) {
-    unsigned int r_odd = r_pair * 2 + 1;
+    unsigned int r_odd  = r_pair * 2 + 1;
     unsigned int r_even = r_pair * 2 + 2;
-    
-    // ========== 奇数轮：生成逆范数约束 ==========
-    // ::3 计算 temp_key = state_key[1] ⊕ state_key[2] ⊕ state_key[3] ⊕ rk_key[round_idx]
-    unsigned int round_idx = r_odd - 1;  // 轮索引从0开始
+
+    const unsigned int base_bytes = r_pair * pair_bytes;
+    const unsigned int base_bits  = base_bytes * 8;
+    const bf128_t* sbox_keys = w_key + base_bits;
+
+    // ========== 奇数轮 ==========
+    unsigned int round_idx = r_odd - 1;
+
     bf128_t temp_odd_key[32];
-    
     for (unsigned int bit = 0; bit < 32; bit++) {
       temp_odd_key[bit] = bf128_add(
           bf128_add(state_key[32 + bit], state_key[64 + bit]),
           bf128_add(state_key[96 + bit], rk_key[(round_idx + 4) * 32 + bit]));
     }
-    
-    // ::4 从见证读取4个字节的 S-box 输出 key
-    // pair_bytes=12: [0..3]=odd_sbox [4..5]=odd_inv [6..9]=even_sbox [10..11]=even_inv
-    // last pair (r_even=SM4_R): [0..3]=odd_sbox [4..5]=odd_inv [6..7]=even_inv
-    const unsigned int pair_bytes = 12;
-    const unsigned int base_bytes = r_pair * pair_bytes;
-    const unsigned int base_bits = base_bytes * 8;
-    const bf128_t* sbox_keys = w_key + base_bits;
-    
+
     bf128_t sbox_out_odd_key[32];
-    
     for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-      const bf128_t* sbox_key = sbox_keys + byte_i * 8;      // 8bits/sbox
-      const bf128_t* inv_key  = sbox_keys + 32 + byte_i * 4; // 4bits/invnorm(nibble)
-      
-      // ::7 生成 inv * temp == 1 约束
-      bf128_t y_key[4];
-      sm4_SSS_inv_norm_to_conjugates_verifier(y_key, inv_key);
-      bf128_t conj_key[8];
-      sm4_SSS_f256_f2_conjugates_SSS_byte(conj_key, temp_odd_key + byte_i * 8);
-      sm4_SSS_inv_norm_constraints_verifier(hasher, conj_key, y_key, delta);
-      
-      // ::8 直接使用 witness 的 S-box 输出
-      memcpy(&sbox_out_odd_key[byte_i * 8], sbox_key, 8 * sizeof(bf128_t));
+      const bf128_t* x_eval = temp_odd_key + byte_i * 8;
+      const bf128_t* y_eval = sbox_keys    + byte_i * 8;  // 原始逆元的 VOLE key-share
+
+      sm4_SSS_full_sbox_verifier(hasher, x_eval, y_eval);
+
+      // 计算 sbox_out_key = affine(y_key)，用于滚动状态更新
+      bf128_t soe_key[8];
+      sm4_SSS_affine_forward_verifier(soe_key, y_eval, delta);
+      memcpy(&sbox_out_odd_key[byte_i * 8], soe_key, 8 * sizeof(bf128_t));
     }
-    
-    // ::9 应用线性变换L
+
     bf128_t L_out_odd_key[32];
     sm4_SSS_linear_l_verifier(L_out_odd_key, sbox_out_odd_key);
-    
-    // ::10 计算新字 = state_key[0] ⊕ L(τ(temp))
+
     bf128_t new_word_odd_key[32];
     for (unsigned int bit = 0; bit < 32; bit++) {
       new_word_odd_key[bit] = bf128_add(state_key[bit], L_out_odd_key[bit]);
     }
-    
-    // ::11 更新状态
-    memmove(state_key, state_key + 32, 96 * sizeof(bf128_t));
-    memcpy(state_key + 96, new_word_odd_key, 32 * sizeof(bf128_t));
-    
-    // ========== 偶数轮：使用状态见证生成S盒约束 ==========
-    if (r_even <= SM4_R) {
-      // ::12 计算 temp_key = state_key[1] ⊕ state_key[2] ⊕ state_key[3] ⊕ rk_key[round_idx]
-      unsigned int round_idx_even = r_even - 1;
-      bf128_t temp_even_key[32];
+    memmove(state_key,       state_key + 32,    96 * sizeof(bf128_t));
+    memcpy (state_key + 96,  new_word_odd_key,  32 * sizeof(bf128_t));
 
+    // ========== 偶数轮 ==========
+    if (r_even <= SM4_R) {
+      unsigned int round_idx_even = r_even - 1;
+
+      bf128_t temp_even_key[32];
       for (unsigned int bit = 0; bit < 32; bit++) {
         temp_even_key[bit] = bf128_add(
             bf128_add(state_key[32 + bit], state_key[64 + bit]),
             bf128_add(state_key[96 + bit], rk_key[(round_idx_even + 4) * 32 + bit]));
       }
 
-      // ::13 读取偶数轮状态见证key；第32轮改用公开输出
-      // Witness布局对应：每对28字节（8字节sbox/inv + 16字节state + 4字节invnorm）
-      // 最后一对（r_even=SM4_R）：8字节sbox/inv + 4字节invnorm（无state）
-      // Rolling window for verifier: use sbox_out_even_key instead of state_witness_key
-      const bf128_t* inv_even_witness_key = NULL;
-      if (r_pair < SM4_R / 2 - 1) {
-        // Normal even round: read sbox_out_even_key from witness, do rolling state update
-        const bf128_t* sbox_out_even_key = sbox_keys + 48;  // bits 48-79
+      // 偶数轮 key-shares 在 bits 32..63
+      const bf128_t* y_even_keys = sbox_keys + 32;
 
+      bf128_t sbox_out_even_key[32];
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        const bf128_t* x_e_eval = temp_even_key + byte_i * 8;
+        const bf128_t* y_e_eval = y_even_keys   + byte_i * 8;
+
+        sm4_SSS_full_sbox_verifier(hasher, x_e_eval, y_e_eval);
+
+        if (r_even < SM4_R) {
+          bf128_t soe_key[8];
+          sm4_SSS_affine_forward_verifier(soe_key, y_e_eval, delta);
+          memcpy(&sbox_out_even_key[byte_i * 8], soe_key, 8 * sizeof(bf128_t));
+        }
+      }
+
+      if (r_even < SM4_R) {
         bf128_t L_out_even_key[32];
         sm4_SSS_linear_l_verifier(L_out_even_key, sbox_out_even_key);
 
@@ -1420,37 +1443,12 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
         for (unsigned int bit = 0; bit < 32; bit++) {
           new_word_even_key[bit] = bf128_add(state_key[bit], L_out_even_key[bit]);
         }
-        memmove(state_key, state_key + 32, 96 * sizeof(bf128_t));
-        memcpy(state_key + 96, new_word_even_key, 32 * sizeof(bf128_t));
-
-        inv_even_witness_key = sbox_keys + 80;  // bits 80-95
+        memmove(state_key,       state_key + 32,     96 * sizeof(bf128_t));
+        memcpy (state_key + 96,  new_word_even_key,  32 * sizeof(bf128_t));
       }
-      if (r_even == SM4_R) {
-        inv_even_witness_key = sbox_keys + 48;
-      }
-
-      // ::14 从witness读取偶数轮invnorm key（nibble打包：4个invnorm = 16 bits）
-      bf128_t inv_norm_even_key[16];
-      for (unsigned int byte_i = 0; byte_i < 4; ++byte_i) {
-        for (unsigned int bit = 0; bit < 4; ++bit) {
-          inv_norm_even_key[byte_i * 4 + bit] = inv_even_witness_key[byte_i * 4 + bit];
-        }
-      }
-
-      // ::16 生成逆范数约束
-      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-        bf128_t y_key[4];
-        sm4_SSS_inv_norm_to_conjugates_verifier(y_key, inv_norm_even_key + byte_i * 4);
-
-        bf128_t conj_key[8];
-        sm4_SSS_f256_f2_conjugates_SSS_byte(conj_key, temp_even_key + byte_i * 8);
-        sm4_SSS_inv_norm_constraints_verifier(hasher, conj_key, y_key, delta);
-      }
+      // r_even == SM4_R: 最终输出检查隐含于约束系统中
     }
   }
-
-  // ::17 验证最终输出（已隐含在约束系统中）
-  (void)owf_out_key;
 }
 
 // ============================================================================
@@ -1526,13 +1524,13 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
       out_tag[i] = bf128_zero();
     }
 
-    // ::1 密钥扩展约束
+    // ::1 密钥扩展并生成哈希约束
+    sm4_SSS_keyexp_forward_prover(rk, rk_tag, w, w_tag);
     sm4_SSS_expkey_constraints_prover(hasher, rk, rk_tag, w, w_tag);
 
     // ::2 加密约束
     sm4_SSS_enc_constraints_prover(hasher, in, in_tag, out, out_tag,
-                                   w + Lke / 8, w_tag + Lke,
-                                   rk, rk_tag, params);
+        w + Lke / 8, w_tag + Lke, rk, rk_tag, params);
   }
   
   free(out_tag);
@@ -1606,12 +1604,13 @@ static void sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t*
       }
     }
 
-    // ::1 密钥扩展约束
+    // ::1 密钥扩展并生成哈希约束
+    sm4_SSS_keyexp_forward_verifier(rk_key, w_key);
     sm4_SSS_expkey_constraints_verifier(hasher, rk_key, w_key, delta);
 
     // ::2 加密约束
     sm4_SSS_enc_constraints_verifier(hasher, in_key, out_key, w_key + Lke,
-                                     rk_key, delta, params);
+        rk_key, delta, params);
   }
   
   free(out_key);
@@ -1797,6 +1796,14 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   const unsigned int ell_hat = ell + 3 * lambda + UNIVERSAL_HASH_B_BITS;
   const size_t chall2_len = 3u * (lambda / 8u) + 8u;
 
+#if defined(DEBUG_SM4_CONSTRAINTS)
+  fprintf(stderr, "[DBG-PROVER] ell=%u, Lke=%u, Lenc=%u, R=%u is_em=%d\n",
+          params->l, params->Lke, params->Lenc, params->R, faest_is_em(params));
+  fprintf(stderr, "[DBG-PROVER] w[0..7]=");
+  for (int _i=0;_i<8;_i++) fprintf(stderr,"%02x",w[_i]);
+  fprintf(stderr,"\n");
+#endif
+
   // ::1-5 将V转换为w_tag
   bf128_t* w_tag = column_to_row_major_and_shrink_V_128_sm4(V, ell, lambda, ell_hat, "prover V->w_tag");
 
@@ -1827,7 +1834,6 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   // ::14 最终化哈希
   zk_hash_128_3_finalize(a0_tilde, a1_tilde, a2_tilde, &hasher, bf_v_star_0,
                          bf128_add(bf_u_star_0, bf_v_star_1), bf_u_star_1);
-
 
   // Stage check: final comparison preparation complete
 
@@ -1879,6 +1885,19 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
   free(q_key);
 
+#if defined(DEBUG_SM4_CONSTRAINTS)
+  uint8_t debug_q_tilde[16];
+  {
+    zk_hash_128_ctx tmp_ctx2;
+    zk_hash_128_init(&tmp_ctx2, chall_2);
+    // re-running is too hard; just print delta
+    fprintf(stderr, "[DBG-VERIFIER] delta=");
+    uint8_t _db[16]; bf128_store(_db, bf_delta);
+    for (int _i=0;_i<16;_i++) fprintf(stderr,"%02x",_db[_i]);
+    fprintf(stderr,"\n");
+  }
+#endif
+
   // ::13-14 最终化哈希
   uint8_t q_tilde[16];  // 128位 = 16字节
   zk_hash_128_finalize(q_tilde, &b_ctx, q_star);
@@ -1892,7 +1911,6 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   bf128_t ret = bf128_add(bf128_load(q_tilde), tmp3);
 
   bf128_store(a0_tilde, ret);
-
 
   // Stage check: final comparison preparation complete
 }

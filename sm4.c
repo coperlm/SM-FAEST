@@ -276,16 +276,17 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       w += 4;
     }
 
-    // 记录每轮 S-box 输入的逆范数（nibble 打包：2个invnorm/字节，各取低4位）
-    // 每轮 4 个 invnorm → 2 字节（j=0,1 → byte[0]; j=2,3 → byte[1]）
+    // 记录每轮 S-box 输入的原始逆元（8位，替代旧的4位invnorm nibble打包）
+    // 每轮 4 个字节 → 4 字节（运算 y = x^{-1} in SM4 GF(2^8)）
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
       // X = K[i+1] ⊕ K[i+2] ⊕ K[i+3] ⊕ CK[i] = S-box 输入
       uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
 
       uint8_t x_bytes[4];
-      sm4_uint32_to_bytes(x, x_bytes);  // S-box 输入（不是输出）
-      for (unsigned int j = 0; j < 4; j += 2) {
-        *w++ = (sm4_invnorm(x_bytes[j]) & 0xf) | ((sm4_invnorm(x_bytes[j + 1]) & 0xf) << 4);
+      sm4_uint32_to_bytes(x, x_bytes);  // S-box 输入
+      for (unsigned int j = 0; j < 4; j++) {
+        // 计算原始逆元 y = x^{-1}：先过 S-box 得 \u03c4(x^{-1})，再逆仿射得 x^{-1}
+        *w++ = sm4_inverse_affine(sm4_sbox(x_bytes[j]));
       }
     }
   } else {
@@ -301,69 +302,35 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
 #endif
   
   // 步骤 3: 记录加密过程的中间状态
-  uint32_t state[4]; // 当前状态 X[i..i+3]
-  
+  // 新布局：每轮4字节原始逆元（y = x^{-1} in SM4 GF(2^8)）
+  // params->R 轮 × 4字节 = 128字节 = 1024 bits = 新 Lenc
+  uint32_t state[4];
+
   // 加载明文/输入
   for (int i = 0; i < 4; i++) {
     state[i] = sm4_bytes_to_uint32(actual_in + 4 * i);
   }
-  
-  // 32 轮迭代，记录中间状态（从 round=1 开始，类似 AES）
-  for (unsigned int round = 1; round < params->R; round++) {
-    if (round % 2 == 1) {
-      // 奇数轮：记录 S-box 输出（4 字节）以及 S-box 输入的逆范数（4 字节）
-      // 注意：invnorm 应用于 S-box 输入 temp_bytes[j]，而不是 S-box 输出
-      uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
-      uint8_t temp_bytes[4];
-      sm4_uint32_to_bytes(temp, temp_bytes);
-      // sbox 输出：4 字节连续写入（不再与 invnorm 交错）
-      for (int j = 0; j < 4; j++) {
-        *w++ = sm4_sbox(temp_bytes[j]);
-      }
-      // invnorm nibble 打包：4 个 invnorm → 2 字节
-      for (int j = 0; j < 4; j += 2) {
-        *w++ = (sm4_invnorm(temp_bytes[j]) & 0xf) | ((sm4_invnorm(temp_bytes[j + 1]) & 0xf) << 4);
-      }
-    }
-    
-    // 执行 SM4 轮函数：X[i+4] = X[i] ⊕ T(X[i+1] ⊕ X[i+2] ⊕ X[i+3] ⊕ rk[i])
+
+  for (unsigned int round = 1; round <= params->R; round++) {
+    // S-box 输入 temp = state[1] ^ state[2] ^ state[3] ^ rk[round-1]
     uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
-    uint32_t new_word = state[0] ^ sm4_t(temp);
-    
-    // 更新状态（循环移位）
-    state[0] = state[1];
-    state[1] = state[2];
-    state[2] = state[3];
-    state[3] = new_word;
-    
-    if (round % 2 == 0) {
-      // 偶数轮（round=2,4,...,30）：记录 S-box 输出（4字节）+ S-box 输入的逆范数（2字节 nibble）
-      // 用 sbox_out_even 代替 state，verifier 用 rolling window 重建状态
-      uint8_t temp_bytes_even[4];
-      sm4_uint32_to_bytes(temp, temp_bytes_even);
-      // S-box 输出：4 字节连续写入
-      for (int j = 0; j < 4; j++) {
-        *w++ = sm4_sbox(temp_bytes_even[j]);
-      }
-      // 逆范数 nibble 打包：2 字节
-      for (int j = 0; j < 4; j += 2) {
-        *w++ = (sm4_invnorm(temp_bytes_even[j]) & 0xf) | ((sm4_invnorm(temp_bytes_even[j + 1]) & 0xf) << 4);
-      }
+    uint8_t temp_bytes[4];
+    sm4_uint32_to_bytes(temp, temp_bytes);
+
+    // 写入4字节原始逆元（x^{-1} in SM4 复合域，途径：sm4_inverse_affine(sm4_sbox(x))）
+    for (int j = 0; j < 4; j++) {
+      *w++ = sm4_inverse_affine(sm4_sbox(temp_bytes[j]));
+    }
+
+    // 执行 SM4 轮函数更新状态（最后一轮之后不需要状态）
+    if (round < params->R) {
+      uint32_t new_word = state[0] ^ sm4_t(temp);
+      state[0] = state[1];
+      state[1] = state[2];
+      state[2] = state[3];
+      state[3] = new_word;
     }
   }
 
-  // 最后的偶数轮 round=32（最后一对，状态是公开输出，只需记录 invnorm，nibble 打包）
-  // temp32 = state[1] ^ state[2] ^ state[3] ^ rk[31]
-  {
-    uint32_t temp32 = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[params->R - 1];
-    uint8_t temp32_bytes[4];
-    sm4_uint32_to_bytes(temp32, temp32_bytes);
-    for (int j = 0; j < 4; j += 2) {
-      *w++ = (sm4_invnorm(temp32_bytes[j]) & 0xf) | ((sm4_invnorm(temp32_bytes[j + 1]) & 0xf) << 4);
-    }
-  }
-
-  // 最后一轮不提交，因此不记录
-  
   assert(w - w_out == params->l / 8);
 }

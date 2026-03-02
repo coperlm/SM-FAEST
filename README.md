@@ -1,53 +1,201 @@
-# FAEST - Reference implementation
+# FAEST - Reference Implementation of the FAEST Digital Signature Scheme
 
-## 工具简介
+## Overview
 
-### Meson
+FAEST is a post-quantum cryptographic signature scheme based on the AES block cipher, submitted to the NIST Post-Quantum Cryptography standardization process. This repository contains the reference implementation in C/C++, designed for academic research and performance evaluation.
 
-**Meson** 是一个现代化的构建系统配置工具（类似于 CMake），负责检测编译器、依赖库、平台特性，并生成底层构建文件。它使用简洁的 Python 风格语法（`meson.build`），比 CMake 更易读。Meson 本身**不执行编译**，而是生成 Ninja 构建文件。
-
-### Ninja
-
-**Ninja** 是一个专注于速度的底层构建执行工具（类似于 Make），它读取 Meson 生成的构建规则，调用编译器完成实际的编译和链接。相比 Make，Ninja 更快且输出更简洁。
-
-> 简单理解：**Meson = 配置阶段**（生成构建计划），**Ninja = 编译阶段**（执行构建计划）。
+**Key Features:**
+- Multiple parameter sets: FAEST-128s, FAEST-EM-128s, FAEST-SM4-128s, FAEST-EM-SM4-128s
+- Comprehensive test suite with known-answer tests
+- Performance benchmarking tools
+- Fair comparison between AES and SM4 implementations
 
 ## Dependencies
 
-For building:
-* `meson` version 0.57 or newer
-* `ninja` (depending on the build system generator selected via `meson`)
+### System Requirements
+- **Operating System**: Linux, macOS, or Windows (with appropriate build tools)
+- **Compiler**: GCC 7+ or Clang 6+ (C11/C++17 support required)
+- **Python**: Python 3.6+ (for benchmarking scripts)
 
-For tests:
-* `boost` (unit test framework)
-* `NTL`
+### Build Dependencies
+- **Meson**: >= 0.57 (build system configuration)
+- **Ninja**: Latest version (build execution)
 
-On Debian-based Linux distributions:
-```sh
-apt install meson ninja-build # for build dependencies
-apt install libboost-test-dev libntl-dev # for test dependencies
+### Test and Benchmark Dependencies
+- **Boost**: >= 1.70 (for program_options and test components)
+- **NTL**: >= 11.0 (Number Theory Library, for cryptographic tests)
+- **Catch2**: >= 3.0 (unit testing framework, included as submodule)
+
+### Installation on Debian/Ubuntu
+```bash
+# Build tools
+sudo apt update
+sudo apt install meson ninja-build gcc g++
+
+# Test dependencies
+sudo apt install libboost-dev libboost-program-options-dev libntl-dev
+
+# Python for scripts
+sudo apt install python3
 ```
 
-On Arch-based Linux distributions:
-```sh
-pacman -S meson ninja        # for build dependencies
-pacman -S boost ntl           # for test dependencies
+### Installation on macOS
+```bash
+# Using Homebrew
+brew install meson ninja boost ntl python3
+
+# Or using MacPorts
+sudo port install meson ninja boost ntl python3
 ```
 
-Both `meson` and `ninja` are also available via PyPI:
-```sh
-pip install meson ninja
+### Installation on Windows
+- Install Visual Studio 2019+ with C++ support
+- Install Python 3.6+
+- Use `pip` to install Meson and Ninja: `pip install meson ninja`
+
+## Installation and Setup
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/your-repo/faest.git
+cd faest
 ```
 
-## Building
+### 2. Configure Build System
+```bash
+meson setup build_release
+```
+This creates a `build_release/` directory with build configuration. Meson will automatically detect available compilers and features.
 
-### 1. 配置项目（仅首次需要）
+### 3. Build the Project
+```bash
+cd build_release
+ninja
+```
+This compiles all variants and test executables.
 
-```sh
-meson setup build
+### 4. (Optional) Install Python Dependencies
+```bash
+pip install -r requirements.txt
+```
+(Note: Currently no external Python packages required)
+
+## Running Tests
+
+### One-Command Test Execution
+To run all tests and verify correctness:
+```bash
+cd build_release
+meson test
 ```
 
-这会在 `build/` 目录中生成构建文件。Meson 会自动检测编译器、AES-NI/AVX2 等硬件特性、以及 OpenSSL 等可选依赖。
+### Individual Component Tests
+```bash
+# API tests for all parameter sets
+./faest_128s/faest_128s_api_test
+./faest_em_128s/faest_em_128s_api_test
+./faest_sm4_128s/faest_sm4_128s_api_test
+./faest_em_sm4_128s/faest_em_sm4_128s_api_test
+
+# Unit tests (if Catch2 enabled)
+meson test -v
+```
+
+### Performance Benchmarks
+```bash
+# Quick benchmark (Python script)
+python3 quick_bench.py
+
+# Detailed benchmarks
+./faest_128s/faest_128s_bench_c2
+./faest_sm4_128s/faest_sm4_128s_bench_c2
+
+# Batch benchmark script
+bash bench.sh
+```
+
+## Interpreting Experimental Results
+
+### Test Output Interpretation
+- **API Tests**: Pass/fail status indicates correct implementation of sign/verify operations
+- **Unit Tests**: Detailed assertions on internal components (VOLE, BAVC, etc.)
+- **Known-Answer Tests**: Compare against precomputed test vectors for validation
+
+### Performance Data Format
+Benchmark outputs are in JSON format with the following fields:
+- `variant`: Parameter set name (e.g., "FAEST_128S")
+- `total_time_us`: Mean execution time in microseconds
+- `min_ms`/`max_ms`: Min/max observed times in milliseconds
+- `iterations`: Number of measurement iterations
+- `sig_size_bytes`: Signature size in bytes
+- `pk_size_bytes`: Public key size in bytes
+- `sk_size_bytes`: Secret key size in bytes
+
+Example output:
+```json
+{
+  "variant": "FAEST_128S",
+  "total_time_us": 15420.5,
+  "min_ms": 14.8,
+  "max_ms": 16.2,
+  "iterations": 10,
+  "sig_size_bytes": 4506,
+  "pk_size_bytes": 32,
+  "sk_size_bytes": 32
+}
+```
+
+### Analyzing Results
+- **Correctness**: All tests must pass (return code 0)
+- **Performance**: Compare `total_time_us` across variants for relative performance
+- **Reproducibility**: Results should be consistent across runs (±5% variance expected)
+- **Fair Comparison**: AES and SM4 variants are built with identical optimizations disabled for equitable comparison
+
+## Project Structure
+```
+faest/
+├── meson.build              # Build configuration
+├── README.md               # This file
+├── requirements.txt        # Python dependencies
+├── aes.c/aes.h            # AES implementation
+├── sm4.c/sm4.h            # SM4 implementation
+├── faest_impl.c           # Core signature logic
+├── tests/                 # Test vectors and unit tests
+├── tools/                 # Benchmarking tools
+├── sha3/                  # Keccak/SHA-3 implementation
+└── build_release/         # Generated build directory
+```
+
+## Reproducibility Notes
+- All random operations use cryptographically secure PRNGs
+- Test vectors are deterministic and version-controlled
+- Performance measurements include statistical analysis (mean, min, max)
+- Hardware-specific optimizations are disabled by default for fair comparison
+
+## License
+This project is licensed under the MIT License. See LICENSE for details.
+
+## Citation
+If you use this implementation in academic work, please cite:
+
+```
+@misc{faest-ref,
+  title={FAEST: Reference Implementation},
+  author={FAEST Development Team},
+  year={2024},
+  url={https://github.com/your-repo/faest}
+}
+```
+
+For the FAEST specification:
+```
+@inproceedings{faest-spec,
+  title={FAEST: Tightly Secure Multi-Signature Schemes from the AES Block Cipher},
+  author={Baum, Carsten and others},
+  booktitle={Advances in Cryptology -- EUROCRYPT 2023},
+  year={2023}
+}
+```
 
 ### 2. 编译
 

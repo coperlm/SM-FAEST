@@ -1,6 +1,5 @@
 build*/
 .vscode/
-my_work/agent_logs/*
 
 # Benchmark 数据和临时文件
 *.jsonl
@@ -19,5 +18,3 @@ __pycache__/
 *~
 .DS_Store
 
-# 个人笔记（如需提交特定文档，使用 git add -f）
-# my_work/ 目录下的文档默认不提交

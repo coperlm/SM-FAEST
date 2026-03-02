@@ -1,14 +1,14 @@
 option(
   'openssl',
   type: 'feature',
-  value: 'disabled',
-  description: 'Use OpenSSL for AES-CTR implementation (PERMANENTLY DISABLED FOR TESTING)',
+  value: 'enabled',
+  description: 'Use OpenSSL for AES-CTR implementation',
 )
 option(
   'aesni',
   type: 'feature',
-  value: 'disabled',
-  description: 'Use ISA extensions for AES (PERMANENTLY DISABLED FOR TESTING)',
+  value: 'enabled',
+  description: 'Use ISA extensions for AES',
 )
 option(
   'SHA3',
