@@ -1,6 +1,17 @@
 build*/
 .vscode/
 
+# 工作笔记和临时文档
+my_work/
+
+# 辅助脚本（用于性能测试和分析）
+bench_analyze.py
+bench_compare.py
+bench_table.py
+collect_bench.py
+fast_test.py
+performance_analysis.py
+
 # Benchmark 数据和临时文件
 *.jsonl
 benchmark_*.txt
