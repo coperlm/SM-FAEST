@@ -282,9 +282,45 @@ static void hash_challenge_3(uint8_t* chall_3, const uint8_t* chall_2, const uin
 }
 
 static bool check_challenge_3(const uint8_t* chall_3, unsigned int start, unsigned int lambda) {
-  for (unsigned int bit_i = start; bit_i != lambda; ++bit_i) {
+  assert(start <= lambda);
+  for (unsigned int bit_i = start; bit_i < lambda; ++bit_i) {
     if (ptr_get_bit(chall_3, bit_i)) {
       return false;
+    }
+  }
+  return true;
+}
+
+// Check if any two i_delta values correspond to sibling nodes (same parent)
+// This would cause reconstruction failure
+static bool check_no_siblings(const uint16_t* i_delta, const faest_paramset_t* params) {
+  const unsigned int tau = params->tau;
+  const unsigned int L = params->L;
+  const unsigned int tmp = 1 << (params->k - 1);
+  
+  // Calculate absolute node indices (alpha) for each i_delta value
+  unsigned int alphas[MAX_TAU];
+  for (unsigned int i = 0; i < tau; ++i) {
+    unsigned int j = i_delta[i];
+    // Replicate pos_in_tree logic
+    if (j < tmp) {
+      alphas[i] = L - 1 + tau * j + i;
+    } else {
+      const unsigned int mask = tmp - 1;
+      alphas[i] = L - 1 + tau * tmp + params->tau1 * (j & mask) + i;
+    }
+  }
+  
+  // Check for siblings (same parent)
+  for (unsigned int i = 0; i < tau; ++i) {
+    for (unsigned int j = i + 1; j < tau; ++j) {
+      if (alphas[i] > 0 && alphas[j] > 0) {
+        unsigned int parent_i = (alphas[i] - 1) / 2;
+        unsigned int parent_j = (alphas[j] - 1) / 2;
+        if (parent_i == parent_j) {
+          return false;
+        }
+      }
     }
   }
   return true;
@@ -350,6 +386,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   const unsigned int ell           = params->l;
   const unsigned int ell_bytes     = ell / 8;
   const unsigned int lambda        = params->lambda;
+  const unsigned int lambda_bytes  = lambda / 8;
   const unsigned int tau           = params->tau;
   const unsigned int ell_hat       = ell + lambda * 3 + UNIVERSAL_HASH_B_BITS;
   const unsigned int ell_hat_bytes = ell_hat / 8;
@@ -394,7 +431,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   hash_challenge_2_init(&chall_2_ctx, chall_1, signature_u_tilde(sig, params), lambda);
   {
     uint8_t V_tilde[MAX_LAMBDA_BYTES + UNIVERSAL_HASH_B];
-    for (unsigned int i = 0; i != lambda; ++i) {
+    for (unsigned int i = 0; i < lambda; ++i) {
       // Step 11
       vole_hash(V_tilde, chall_1, V[i], ell, lambda);
       // Step 14
@@ -434,36 +471,56 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
                         signature_a2_tilde(sig, params), lambda);
 
   uint32_t ctr = 0;
+  uint8_t chall_3_tmp[MAX_LAMBDA_BYTES];  // 临时buffer for challenge_3
+  
+  // 计算decom_i的大小: com_size * tau + T_open * lambda_bytes
+  const unsigned int com_size = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
+  const unsigned int decom_i_size = com_size * tau + params->T_open * lambda_bytes;
+  uint8_t* decom_i_tmp = malloc(decom_i_size);  // 临时buffer for decom_i
+  assert(decom_i_tmp);
+  
   for (; true; ++ctr) {
-    uint8_t* chall_3 = signature_chall_3(sig, params);
-    hash_challenge_3_final(chall_3, &chall_3_ctx, ctr, lambda);
-    // declassify chall_3 which is put into the signature
-    faest_declassify(chall_3, lambda / 8);
+    // 用临时buffer计算challenge_3，避免覆盖签名中的值
+    hash_challenge_3_final(chall_3_tmp, &chall_3_ctx, ctr, lambda);
+    faest_declassify(chall_3_tmp, lambda / 8);
 
     // ::23
-    if (!check_challenge_3(chall_3, lambda - w_grind, lambda)) {
+    if (!check_challenge_3(chall_3_tmp, lambda - w_grind, lambda)) {
       continue;
     }
 
     // ::26
     uint16_t decoded_chall_3[MAX_TAU];
     if (params_is_sm4(params)) {
-      if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3, params)) {
+      if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3_tmp, params)) {
         continue;
       }
-    } else if (!decode_all_chall_3(decoded_chall_3, chall_3, params)) {
+      // SM4-specific: Check for sibling nodes (would cause reconstruction failure due to workaround)
+      if (!check_no_siblings(decoded_chall_3, params)) {
+        continue;
+      }
+    } else if (!decode_all_chall_3(decoded_chall_3, chall_3_tmp, params)) {
       continue;
     }
 
-    // :27
+    // :27 - 使用临时buffer避免失败时修改签名
+    bool success = false;
     if (params_is_sm4(params)) {
-      if (bavc_open_sm4(signature_decom_i(sig, params), &bavc, decoded_chall_3, params)) {
-        break;
-      }
-    } else if (bavc_open(signature_decom_i(sig, params), &bavc, decoded_chall_3, params)) {
+      success = bavc_open_sm4(decom_i_tmp, &bavc, decoded_chall_3, params);
+    } else {
+      success = bavc_open(decom_i_tmp, &bavc, decoded_chall_3, params);
+    }
+    
+    if (success) {
+      // 只有在grinding+decode+bavc都成功时，才复制到签名
+      memcpy(signature_chall_3(sig, params), chall_3_tmp, lambda / 8);
+      memcpy(signature_decom_i(sig, params), decom_i_tmp, decom_i_size);
+      
       break;
     }
   }
+  
+  free(decom_i_tmp);
   hash_clear(&chall_3_ctx);
   bavc_clear(&bavc);
 
@@ -532,7 +589,7 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   {
     const uint8_t* chall_3 = dsignature_chall_3(sig, params);
     uint8_t Q_tilde[MAX_LAMBDA_BYTES + UNIVERSAL_HASH_B];
-    for (unsigned int i = 0; i != lambda; ++i) {
+    for (unsigned int i = 0; i < lambda; ++i) {
       // Step 12
       vole_hash(Q_tilde, chall_1, q[i], ell, lambda);
       // Step 14
@@ -569,5 +626,6 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
                    dsignature_a2_tilde(sig, params), dsignature_ctr(sig, params), lambda);
 
   // Step 21
-  return memcmp(chall_3, dsignature_chall_3(sig, params), lambda_bytes) == 0 ? 0 : -1;
+  int result = memcmp(chall_3, dsignature_chall_3(sig, params), lambda_bytes);
+  return result == 0 ? 0 : -1;
 }

@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MAX_LAMBDA 128
+#define MAX_LAMBDA 256
 #define MAX_LAMBDA_BYTES (MAX_LAMBDA / 8)
 #define MAX_DEPTH 12
 #define MAX_TAU 32

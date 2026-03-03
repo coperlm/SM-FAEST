@@ -249,15 +249,6 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
     }
   }
 
-  /* SM4 workaround: clear any parent whose two children are both flagged, to
-   * force PRG expansion later. Without this, verifier skips both copy and
-   * PRG and leaves the corresponding child key at zero. */
-  for (unsigned int i = 0; i < L - 1; ++i) {
-    if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
-      ptr_clear_bit(s, i);
-    }
-  }
-
   // Step 16..17
   if (nh - 2 * tau + 1 > params->T_open) {
     free(s);
@@ -277,6 +268,18 @@ bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
     if ((ptr_get_bit(s, 2 * i + 1) ^ ptr_get_bit(s, 2 * i + 2)) == 1) {
       const unsigned int alpha = 2 * i + 1 + ptr_get_bit(s, 2 * i + 1);
       decom_i = faest_mempcpy(decom_i, NODE(vc->k, alpha, lambda_bytes), lambda_bytes);
+    }
+  }
+
+  /* SM4 workaround: clear any parent whose two children are both flagged, to
+   * force PRG expansion later. Without this, verifier skips both copy and
+   * PRG and leaves the corresponding child key at zero. 
+   * IMPORTANT: Must be AFTER the second upward propagation to match reconstruct_keys */
+  if (params_is_sm4(params)) {
+    for (unsigned int i = 0; i < L - 1; ++i) {
+      if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
+        ptr_clear_bit(s, i);
+      }
     }
   }
 
@@ -323,9 +326,11 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
   }
 
   /* clear parent bits when both children are set, so PRG fills them */
-  for (unsigned int i = 0; i < L - 1; ++i) {
-    if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
-      ptr_clear_bit(s, i);
+  if (params_is_sm4(params)) {
+    for (unsigned int i = 0; i < L - 1; ++i) {
+      if (ptr_get_bit(s, 2*i+1) && ptr_get_bit(s, 2*i+2)) {
+        ptr_clear_bit(s, i);
+      }
     }
   }
 

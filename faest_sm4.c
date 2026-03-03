@@ -1772,7 +1772,7 @@ static bf128_t* column_to_row_major_and_shrink_V_128_sm4(uint8_t** V, unsigned i
      * This is applied symmetrically for both Prover (V → w_tag) and
      * Verifier (Q → q_key) since both call this function.
      */
-    for (unsigned int column = 0; column != lambda; ++column) {
+    for (unsigned int column = 0; column < lambda; ++column) {
       ptr_set_bit(new_row, column, ptr_get_bit(V[column], row));
     }
 

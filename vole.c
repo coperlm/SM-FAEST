@@ -13,6 +13,7 @@
 #include "random_oracle.h"
 #include "instances.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -114,7 +115,8 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
   }
 
   // ensure 0-padding up to lambda
-  for (; v_idx != lambda; ++v_idx) {
+  assert(v_idx <= lambda);
+  for (; v_idx < lambda; ++v_idx) {
     memset(v[v_idx], 0, ellhat_bytes);
   }
 
@@ -198,7 +200,8 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
   }
 
   // ensure 0-padding up to lambda
-  for (; q_idx != lambda; ++q_idx) {
+  assert(q_idx <= lambda);
+  for (; q_idx < lambda; ++q_idx) {
     memset(q[q_idx], 0, ellhat_bytes);
   }
 
@@ -271,7 +274,8 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
     sd_i += lambda_bytes * (Ni - 1);
   }
 
-  for (; q_idx != lambda; ++q_idx) {
+  assert(q_idx <= lambda);
+  for (; q_idx < lambda; ++q_idx) {
     memset(q[q_idx], 0, ellhat_bytes);
   }
 
