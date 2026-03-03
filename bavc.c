@@ -341,11 +341,10 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
   }
 
   for (unsigned int i = 0; i != L - 1; ++i) {
-    /* root node (i==0) always needs expansion so that k1 is available; other
-     * internal nodes are only expanded if their subtree contains no known
-     * leaves (s bit zero).  When root bit is set it merely indicates at least
-     * one leaf is known, not that the root key itself is present. */
-    if (i == 0 || !ptr_get_bit(s, i)) {
+    /* SM4 workaround: root node (i==0) always needs expansion when using SM4 
+     * so that k1 is available; for AES, use original logic. Other internal 
+     * nodes are only expanded if their subtree contains no known leaves (s bit zero). */
+    if ((params_is_sm4(params) && i == 0) || !ptr_get_bit(s, i)) {
       prg_2_lambda(keys + i * lambda_bytes, iv, i, keys + (2 * i + 1) * lambda_bytes, lambda);
     }
   }
