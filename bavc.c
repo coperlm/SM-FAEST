@@ -341,10 +341,9 @@ static bool reconstruct_keys(uint8_t* s, uint8_t* keys, const uint8_t* decom_i,
   }
 
   for (unsigned int i = 0; i != L - 1; ++i) {
-    /* SM4 workaround: root node (i==0) always needs expansion when using SM4 
-     * so that k1 is available; for AES, use original logic. Other internal 
-     * nodes are only expanded if their subtree contains no known leaves (s bit zero). */
-    if ((params_is_sm4(params) && i == 0) || !ptr_get_bit(s, i)) {
+    /* Only expand internal nodes if their subtree contains no known leaves (s bit zero).
+     * Original simple logic works for both AES and SM4. */
+    if (!ptr_get_bit(s, i)) {
       prg_2_lambda(keys + i * lambda_bytes, iv, i, keys + (2 * i + 1) * lambda_bytes, lambda);
     }
   }
