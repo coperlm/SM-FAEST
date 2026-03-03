@@ -19,16 +19,59 @@
 
 static const uint32_t TWEAK_OFFSET = UINT32_C(0x80000000); // 2^31
 
-static inline bool params_is_sm4(const faest_paramset_t* params) {
-  return params->R == 32;
-}
-
 static inline uint16_t sm4_bitreverse_k(uint16_t v, unsigned int k) {
   uint16_t r = 0;
   for (unsigned int i = 0; i < k; ++i) {
     r = (uint16_t)((r << 1) | ((v >> i) & 1u));
   }
   return r;
+}
+
+static unsigned int convert_to_vole_reconstruct(const uint8_t* iv, const uint8_t* sd_compact,
+                                                uint16_t i_delta, unsigned int i,
+                                                unsigned int outlen, uint8_t* v,
+                                                const faest_paramset_t* params) {
+  const unsigned int lambda        = params->lambda;
+  const unsigned int tau_1         = params->tau1;
+  const unsigned int k             = params->k;
+  const unsigned int num_instances = bavc_max_node_index(i, tau_1, k);
+  const unsigned int lambda_bytes  = lambda / 8;
+  const unsigned int depth         = bavc_max_node_depth(i, tau_1, k);
+
+  uint8_t* r = calloc(2 * num_instances, outlen);
+  if (!r) {
+    return 0;
+  }
+
+#define R_REC(row, column) (r + (((row) % 2) * num_instances + (column)) * outlen)
+#define V_REC(idx) (v + (idx) * outlen)
+
+  uint32_t tweak = i ^ TWEAK_OFFSET;
+
+  for (unsigned int dst_j = 1; dst_j < num_instances; ++dst_j) {
+    const unsigned int orig_j = dst_j ^ i_delta;
+    const unsigned int src_idx = (orig_j < i_delta) ? orig_j : (orig_j - 1);
+    if (faest_is_sm4(params)) {
+      sm4_prg(sd_compact + lambda_bytes * src_idx, iv, tweak, R_REC(0, dst_j), lambda, outlen);
+    } else {
+      prg(sd_compact + lambda_bytes * src_idx, iv, tweak, R_REC(0, dst_j), lambda, outlen);
+    }
+  }
+
+  memset(v, 0, depth * outlen);
+  for (unsigned int j = 0; j < depth; j++) {
+    const unsigned int depthloop = num_instances >> (j + 1);
+    for (unsigned int idx = 0; idx < depthloop; idx++) {
+      xor_u8_array(V_REC(j), R_REC(j, 2 * idx + 1), V_REC(j), outlen);
+      xor_u8_array(R_REC(j, 2 * idx), R_REC(j, 2 * idx + 1), R_REC(j + 1, idx), outlen);
+    }
+  }
+
+#undef R_REC
+#undef V_REC
+
+  free(r);
+  return depth;
 }
 
 #if !defined(FAEST_TESTS)
@@ -47,6 +90,9 @@ static
 
   // (depth + 1) x num_instances array of outlen; but we only need two rows at a time
   uint8_t* r = calloc(2 * num_instances, outlen);
+  if (!r) {
+    return 0;
+  }
 
 #define R(row, column) (r + (((row) % 2) * num_instances + (column)) * outlen)
 #define V(idx) (v + (idx) * outlen)
@@ -55,7 +101,7 @@ static
 
   // Step: 2
   if (!sd0_bot) {
-    if (params_is_sm4(params)) {
+    if (faest_is_sm4(params)) {
       sm4_prg(sd, iv, tweak, R(0, 0), lambda, outlen);
     } else {
       prg(sd, iv, tweak, R(0, 0), lambda, outlen);
@@ -64,7 +110,7 @@ static
 
   // Step: 3..4
   for (unsigned int j = 1; j < num_instances; ++j) {
-    if (params_is_sm4(params)) {
+    if (faest_is_sm4(params)) {
       sm4_prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
     } else {
       prg(sd + lambda_bytes * j, iv, tweak, R(0, j), lambda, outlen);
@@ -89,7 +135,7 @@ static
   return depth;
 }
 
-void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
+bool vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
                  const faest_paramset_t* params, bavc_t* bavc, uint8_t* c, uint8_t* u,
                  uint8_t** v) {
   const unsigned int lambda       = params->lambda;
@@ -99,10 +145,15 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
   const unsigned int tau_1        = params->tau1;
   const unsigned int k            = params->k;
 
-  bavc_commit(bavc, rootKey, iv, params);
+  if (!bavc_commit(bavc, rootKey, iv, params)) {
+    return false;
+  }
 
   uint8_t* ui = malloc(tau * ellhat_bytes);
-  assert(ui);
+  if (!ui) {
+    bavc_clear(bavc);
+    return false;
+  }
 
   unsigned int v_idx = 0;
   uint8_t* sd_i      = bavc->sd;
@@ -110,6 +161,11 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
     // Step 6
     const unsigned int ki =
         convert_to_vole(iv, sd_i, false, i, ellhat_bytes, ui + i * ellhat_bytes, v[v_idx], params);
+    if (ki == 0) {
+      free(ui);
+      bavc_clear(bavc);
+      return false;
+    }
     v_idx += ki;
     sd_i += lambda_bytes * bavc_max_node_index(i, tau_1, k);
   }
@@ -127,6 +183,7 @@ void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
     xor_u8_array(u, ui + i * ellhat_bytes, c + (i - 1) * ellhat_bytes, ellhat_bytes);
   }
   free(ui);
+  return true;
 }
 
 
@@ -149,7 +206,9 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
   bavc_rec_t bavc_rec;
   bavc_rec.h = com;
   bavc_rec.s = malloc((L - tau) * lambda_bytes);
-  assert(bavc_rec.s);
+  if (!bavc_rec.s) {
+    return false;
+  }
 
   if (!bavc_reconstruct(&bavc_rec, decom_i, i_delta, iv, params)) {
     free(bavc_rec.s);
@@ -158,8 +217,12 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
 
   uint8_t* sd   = malloc((1 << k) * lambda_bytes);
   uint8_t* qtmp = malloc(MAX_DEPTH * ellhat_bytes);
-  assert(sd);
-  assert(qtmp);
+  if (!sd || !qtmp) {
+    free(sd);
+    free(qtmp);
+    free(bavc_rec.s);
+    return false;
+  }
 
   // Step: 1
   unsigned int q_idx = 0;
@@ -177,12 +240,17 @@ bool vole_reconstruct(uint8_t* com, uint8_t** q, const uint8_t* iv, const uint8_
       }
 
       const unsigned int src_idx = (j < i_delta_eff) ? j : (j - 1);
-            memcpy(sd + (j ^ i_delta_eff) * lambda_bytes, sd_i + lambda_bytes * src_idx,
-              lambda_bytes);
+      memcpy(sd + (j ^ i_delta_eff) * lambda_bytes, sd_i + lambda_bytes * src_idx, lambda_bytes);
     }
 
     // Step: 7..8
     const unsigned int ki = convert_to_vole(iv, sd, true, i, ellhat_bytes, NULL, qtmp, params);
+    if (ki == 0) {
+      free(qtmp);
+      free(sd);
+      free(bavc_rec.s);
+      return false;
+    }
 
     // Step 11
     if (i == 0) {
@@ -232,35 +300,34 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
   bavc_rec_t bavc_rec;
   bavc_rec.h = com;
   bavc_rec.s = malloc((L - tau) * lambda_bytes);
-  assert(bavc_rec.s);
+  if (!bavc_rec.s) {
+    return false;
+  }
 
   if (!bavc_reconstruct_sm4(&bavc_rec, decom_i, i_delta, iv, params)) {
     free(bavc_rec.s);
     return false;
   }
 
-  uint8_t* sd   = malloc((1 << k) * lambda_bytes);
   uint8_t* qtmp = malloc(MAX_DEPTH * ellhat_bytes);
-  assert(sd);
-  assert(qtmp);
+  if (!qtmp) {
+    free(qtmp);
+    free(bavc_rec.s);
+    return false;
+  }
 
   unsigned int q_idx = 0;
   uint8_t* sd_i      = bavc_rec.s;
   for (unsigned int i = 0; i < tau; i++) {
     const unsigned int Ni = bavc_max_node_index(i, tau1, k);
 
-    const uint16_t i_delta_eff = i_delta[i];
-    memset(sd, 0, (size_t)Ni * lambda_bytes);
-    for (unsigned int j = 0; j < Ni; j++) {
-      if (j == i_delta_eff) {
-        continue;
-      }
-      const unsigned int src_idx = (j < i_delta_eff) ? j : (j - 1);
-      memcpy(sd + (j ^ i_delta_eff) * lambda_bytes, sd_i + lambda_bytes * src_idx,
-             lambda_bytes);
+    const unsigned int ki =
+        convert_to_vole_reconstruct(iv, sd_i, i_delta[i], i, ellhat_bytes, qtmp, params);
+    if (ki == 0) {
+      free(qtmp);
+      free(bavc_rec.s);
+      return false;
     }
-
-    const unsigned int ki = convert_to_vole(iv, sd, true, i, ellhat_bytes, NULL, qtmp, params);
 
     if (i == 0) {
       memcpy(q[q_idx], qtmp, ellhat_bytes * ki);
@@ -280,7 +347,6 @@ bool vole_reconstruct_sm4(uint8_t* com, uint8_t** q, const uint8_t* iv, const ui
   }
 
   free(qtmp);
-  free(sd);
   free(bavc_rec.s);
   return true;
 }

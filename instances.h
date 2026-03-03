@@ -68,6 +68,10 @@ static inline bool ATTR_PURE faest_is_em(const faest_paramset_t* params) {
   return params->Ske == 0;
 }
 
+static inline bool ATTR_PURE faest_is_sm4(const faest_paramset_t* params) {
+  return params->R == 32;
+}
+
 FAEST_END_C_DECL
 
 #endif

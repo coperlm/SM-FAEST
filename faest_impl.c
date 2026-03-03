@@ -8,6 +8,7 @@
 
 #include "faest_impl.h"
 #include "aes.h"
+#include "compat.h"
 #include "faest_aes.h"
 #include "faest_sm4.h"
 #include "randomness.h"
@@ -291,46 +292,22 @@ static bool check_challenge_3(const uint8_t* chall_3, unsigned int start, unsign
   return true;
 }
 
-// Check if any two i_delta values correspond to sibling nodes (same parent)
-// This would cause reconstruction failure
-static bool check_no_siblings(const uint16_t* i_delta, const faest_paramset_t* params) {
-  const unsigned int tau = params->tau;
-  const unsigned int L = params->L;
-  const unsigned int tmp = 1 << (params->k - 1);
-  
-  // Calculate absolute node indices (alpha) for each i_delta value
-  unsigned int alphas[MAX_TAU];
-  for (unsigned int i = 0; i < tau; ++i) {
-    unsigned int j = i_delta[i];
-    // Replicate pos_in_tree logic
-    if (j < tmp) {
-      alphas[i] = L - 1 + tau * j + i;
-    } else {
-      const unsigned int mask = tmp - 1;
-      alphas[i] = L - 1 + tau * tmp + params->tau1 * (j & mask) + i;
-    }
-  }
-  
-  // Check for siblings (same parent)
-  for (unsigned int i = 0; i < tau; ++i) {
-    for (unsigned int j = i + 1; j < tau; ++j) {
-      if (alphas[i] > 0 && alphas[j] > 0) {
-        unsigned int parent_i = (alphas[i] - 1) / 2;
-        unsigned int parent_j = (alphas[j] - 1) / 2;
-        if (parent_i == parent_j) {
-          return false;
-        }
-      }
-    }
-  }
-  return true;
-}
-
-static inline bool params_is_sm4(const faest_paramset_t* params) {
-  return params->R == 32;
-}
-
 static void free_pointer_array(uint8_t*** ptr) {
+  if (!ptr || !*ptr) {
+    return;
+  }
+  free((*ptr)[0]);
+  free(*ptr);
+  *ptr = NULL;
+}
+
+static void free_pointer_array_secure(uint8_t*** ptr, size_t rows, size_t row_bytes) {
+  if (!ptr || !*ptr) {
+    return;
+  }
+  if ((*ptr)[0] && rows && row_bytes) {
+    faest_explicit_bzero((*ptr)[0], rows * row_bytes);
+  }
   free((*ptr)[0]);
   free(*ptr);
   *ptr = NULL;
@@ -403,18 +380,52 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   hash_r_iv(rootkey, signature_iv_pre(sig, params), iv, owf_key, mu, rho, rholen, lambda);
 
   // ::6-7
-  bavc_t bavc;
+  bavc_t bavc = {0};
+  bool bavc_initialized = false;
   uint8_t* u = malloc(ell_hat_bytes);
-  assert(u);
+  if (!u) {
+    memset(sig, 0, params->sig_size);
+    faest_explicit_bzero(rootkey, sizeof(rootkey));
+    faest_explicit_bzero(mu, sizeof(mu));
+    faest_explicit_bzero(iv, sizeof(iv));
+    return;
+  }
   // v has \hat \ell rows, \lambda columns, storing in column-major order
   uint8_t** V = malloc(lambda * sizeof(uint8_t*));
-  assert(V);
+  if (!V) {
+    faest_explicit_bzero(u, ell_hat_bytes);
+    free(u);
+    memset(sig, 0, params->sig_size);
+    faest_explicit_bzero(rootkey, sizeof(rootkey));
+    faest_explicit_bzero(mu, sizeof(mu));
+    faest_explicit_bzero(iv, sizeof(iv));
+    return;
+  }
   V[0] = calloc(lambda, ell_hat_bytes);
-  assert(V[0]);
+  if (!V[0]) {
+    free(V);
+    faest_explicit_bzero(u, ell_hat_bytes);
+    free(u);
+    memset(sig, 0, params->sig_size);
+    faest_explicit_bzero(rootkey, sizeof(rootkey));
+    faest_explicit_bzero(mu, sizeof(mu));
+    faest_explicit_bzero(iv, sizeof(iv));
+    return;
+  }
   for (unsigned int i = 1; i < lambda; ++i) {
     V[i] = V[0] + i * ell_hat_bytes;
   }
-  vole_commit(rootkey, iv, ell_hat, params, &bavc, signature_c(sig, 0, params), u, V);
+  if (!vole_commit(rootkey, iv, ell_hat, params, &bavc, signature_c(sig, 0, params), u, V)) {
+    free_pointer_array_secure(&V, lambda, ell_hat_bytes);
+    faest_explicit_bzero(u, ell_hat_bytes);
+    free(u);
+    memset(sig, 0, params->sig_size);
+    faest_explicit_bzero(rootkey, sizeof(rootkey));
+    faest_explicit_bzero(mu, sizeof(mu));
+    faest_explicit_bzero(iv, sizeof(iv));
+    return;
+  }
+  bavc_initialized = true;
 
   // ::8
   uint8_t chall_1[(5 * MAX_LAMBDA_BYTES) + 8];
@@ -441,7 +452,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
   // ::13 witness provided by caller
   // ::14
-  if (params_is_sm4(params)) {
+  if (faest_is_sm4(params)) {
     sm4_pack_d_big_endian(signature_d(sig, params), witness, u, ell);
   } else {
     xor_u8_array(witness, u, signature_d(sig, params), ell_bytes);
@@ -453,7 +464,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
   // ::16-20
   uint8_t a0_tilde[MAX_LAMBDA_BYTES];
-  if (params_is_sm4(params)) {
+  if (faest_is_sm4(params)) {
     sm4_prove(a0_tilde, signature_a1_tilde(sig, params), signature_a2_tilde(sig, params), witness,
               u + ell_bytes, V, owf_input, owf_output, chall_2, params);
   } else {
@@ -461,7 +472,8 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
               u + ell_bytes, V, owf_input, owf_output, chall_2, params);
   }
 
-  free_pointer_array(&V);
+  free_pointer_array_secure(&V, lambda, ell_hat_bytes);
+  faest_explicit_bzero(u, ell_hat_bytes);
   free(u);
   u = NULL;
 
@@ -472,12 +484,26 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
   uint32_t ctr = 0;
   uint8_t chall_3_tmp[MAX_LAMBDA_BYTES];  // 临时buffer for challenge_3
+  uint16_t decoded_chall_3[MAX_TAU] = {0};
   
   // 计算decom_i的大小: com_size * tau + T_open * lambda_bytes
   const unsigned int com_size = faest_is_em(params) ? (2 * lambda_bytes) : (3 * lambda_bytes);
   const unsigned int decom_i_size = com_size * tau + params->T_open * lambda_bytes;
   uint8_t* decom_i_tmp = malloc(decom_i_size);  // 临时buffer for decom_i
-  assert(decom_i_tmp);
+  if (!decom_i_tmp) {
+    hash_clear(&chall_3_ctx);
+    if (bavc_initialized) {
+      bavc_clear(&bavc);
+    }
+    memset(sig, 0, params->sig_size);
+    faest_explicit_bzero(a0_tilde, sizeof(a0_tilde));
+    faest_explicit_bzero(chall_2, sizeof(chall_2));
+    faest_explicit_bzero(chall_1, sizeof(chall_1));
+    faest_explicit_bzero(rootkey, sizeof(rootkey));
+    faest_explicit_bzero(mu, sizeof(mu));
+    faest_explicit_bzero(iv, sizeof(iv));
+    return;
+  }
   
   for (; true; ++ctr) {
     // 用临时buffer计算challenge_3，避免覆盖签名中的值
@@ -490,13 +516,8 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     }
 
     // ::26
-    uint16_t decoded_chall_3[MAX_TAU];
-    if (params_is_sm4(params)) {
+    if (faest_is_sm4(params)) {
       if (!decode_all_chall_3_sm4(decoded_chall_3, chall_3_tmp, params)) {
-        continue;
-      }
-      // SM4-specific: Check for sibling nodes (would cause reconstruction failure due to workaround)
-      if (!check_no_siblings(decoded_chall_3, params)) {
         continue;
       }
     } else if (!decode_all_chall_3(decoded_chall_3, chall_3_tmp, params)) {
@@ -505,7 +526,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
     // :27 - 使用临时buffer避免失败时修改签名
     bool success = false;
-    if (params_is_sm4(params)) {
+    if (faest_is_sm4(params)) {
       success = bavc_open_sm4(decom_i_tmp, &bavc, decoded_chall_3, params);
     } else {
       success = bavc_open(decom_i_tmp, &bavc, decoded_chall_3, params);
@@ -519,14 +540,25 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
       break;
     }
   }
-  
+
+  faest_explicit_bzero(decom_i_tmp, decom_i_size);
   free(decom_i_tmp);
+  faest_explicit_bzero(decoded_chall_3, sizeof(decoded_chall_3));
+  faest_explicit_bzero(chall_3_tmp, sizeof(chall_3_tmp));
   hash_clear(&chall_3_ctx);
-  bavc_clear(&bavc);
+  if (bavc_initialized) {
+    bavc_clear(&bavc);
+  }
 
   // copy counter to signature
   ctr = htole32(ctr);
   memcpy(signature_ctr(sig, params), &ctr, sizeof(ctr));
+  faest_explicit_bzero(a0_tilde, sizeof(a0_tilde));
+  faest_explicit_bzero(chall_2, sizeof(chall_2));
+  faest_explicit_bzero(chall_1, sizeof(chall_1));
+  faest_explicit_bzero(rootkey, sizeof(rootkey));
+  faest_explicit_bzero(mu, sizeof(mu));
+  faest_explicit_bzero(iv, sizeof(iv));
 }
 
 int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const uint8_t* owf_input,
@@ -557,15 +589,20 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // Step: 6-7
   // q is a \hat \ell \times \lambda matrix
   uint8_t** q = malloc(lambda * sizeof(uint8_t*));
-  assert(q);
+  if (!q) {
+    return -1;
+  }
   q[0] = calloc(lambda, ell_hat_bytes);
-  assert(q[0]);
+  if (!q[0]) {
+    free(q);
+    return -1;
+  }
   for (unsigned int i = 1; i < lambda; ++i) {
     q[i] = q[0] + i * ell_hat_bytes;
   }
   uint8_t hcom[MAX_LAMBDA_BYTES * 2];
 
-  if (params_is_sm4(params)) {
+  if (faest_is_sm4(params)) {
     if (!vole_reconstruct_sm4(hcom, q, iv, dsignature_chall_3(sig, params),
                               dsignature_decom_i(sig, params), dsignature_c(sig, 0, params),
                               ell_hat, params)) {
@@ -609,7 +646,7 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // Step 18
   const uint8_t* d = dsignature_d(sig, params);
   uint8_t a0_tilde[MAX_LAMBDA_BYTES];
-  if (params_is_sm4(params)) {
+  if (faest_is_sm4(params)) {
     sm4_verify(a0_tilde, d, q, chall_2, dsignature_chall_3(sig, params),
                dsignature_a1_tilde(sig, params), dsignature_a2_tilde(sig, params), owf_input,
                owf_output, params);

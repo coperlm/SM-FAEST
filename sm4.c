@@ -139,8 +139,10 @@ static inline void sm4_increment_iv(uint8_t* iv)
 {
     /* increment low‑order 32‑bit word only; carry is truncated at 4 bytes.
      this matches both the SM4 and PRG_SM4 unit tests. */
-  uint32_t* counter = (uint32_t*)iv;
-  *counter = htole32(le32toh(*counter) + 1);
+  uint32_t counter;
+  memcpy(&counter, iv, sizeof(counter));
+  counter = htole32(le32toh(counter) + 1);
+  memcpy(iv, &counter, sizeof(counter));
 }
 
 // ============ PRG 实现（SM4-CTR 模式）============
@@ -178,7 +180,11 @@ void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out
     uint8_t last_block[SM4_BLOCK_SIZE];
     sm4_encrypt_block(&rk, internal_iv, last_block);
     memcpy(out, last_block, outlen % SM4_BLOCK_SIZE);
+    faest_explicit_bzero(last_block, sizeof(last_block));
   }
+
+  faest_explicit_bzero(&rk, sizeof(rk));
+  faest_explicit_bzero(internal_iv, sizeof(internal_iv));
 }
 
 void sm4_prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,

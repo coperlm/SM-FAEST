@@ -11,7 +11,7 @@
 
 FAEST_BEGIN_C_DECL
 
-void vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
+bool vole_commit(const uint8_t* rootKey, const uint8_t* iv, unsigned int ellhat,
                  const faest_paramset_t* params, bavc_t* vecCom, uint8_t* c, uint8_t* u,
                  uint8_t** v);
 

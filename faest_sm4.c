@@ -346,6 +346,59 @@ static const bf128_t sm4_beta_cubes_bf128[4] = {
     BF128C(UINT64_C(0xaca8c2a7190f676b), UINT64_C(0xdb4a932e2cae3d8b)),  // sm4_bcb(0x77)=bcu[3]
 };
 
+static bool sm4_emb_constants_self_checked = false;
+static bool sm4_emb_constants_valid = false;
+
+static bool sm4_bf128_equal(bf128_t lhs, bf128_t rhs) {
+  uint8_t l[BF128_NUM_BYTES];
+  uint8_t r[BF128_NUM_BYTES];
+  bf128_store(l, lhs);
+  bf128_store(r, rhs);
+  return memcmp(l, r, BF128_NUM_BYTES) == 0;
+}
+
+static bool sm4_check_embedding_constants_once(void) {
+  if (sm4_emb_constants_self_checked) {
+    return sm4_emb_constants_valid;
+  }
+
+  sm4_emb_constants_self_checked = true;
+  sm4_emb_constants_valid = false;
+
+  const uint8_t beta = 0x0c;
+  uint8_t beta_sq = beta;
+  uint8_t beta_cu = beta;
+
+  for (unsigned int i = 0; i < 5; ++i) {
+    const bf128_t expected_sq = sm4_byte_combine_bits(beta_sq);
+    if (!sm4_bf128_equal(expected_sq, sm4_beta_squares_bf128[i])) {
+      return false;
+    }
+    beta_sq = bf8_square_sm4(beta_sq);
+  }
+
+  for (unsigned int i = 0; i < 4; ++i) {
+    const bf128_t expected_cu = sm4_byte_combine_bits(beta_cu);
+    if (!sm4_bf128_equal(expected_cu, sm4_beta_cubes_bf128[i])) {
+      return false;
+    }
+    beta_cu = bf8_mul_sm4(bf8_square_sm4(beta_cu), beta);
+  }
+
+  for (uint8_t x = 1; x < 16; ++x) {
+    for (uint8_t y = 1; y < 16; ++y) {
+      const bf128_t lhs = sm4_byte_combine_bits(bf8_mul_sm4(x, y));
+      const bf128_t rhs = bf128_mul(sm4_byte_combine_bits(x), sm4_byte_combine_bits(y));
+      if (!sm4_bf128_equal(lhs, rhs)) {
+        return false;
+      }
+    }
+  }
+
+  sm4_emb_constants_valid = true;
+  return true;
+}
+
 // ============================================================================
 // SM4 常量: FK (系统参数) 和 CK (固定参数)
 // ============================================================================
@@ -1459,7 +1512,7 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
  * 完整的SM4约束系统 (Prover版本)
  * 包含密钥扩展和加密约束
  */
-static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t* w,
+static bool sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t* w,
                                        const bf128_t* w_tag, const uint8_t* owf_in,
                                        const uint8_t* owf_out, const faest_paramset_t* params) {
   const unsigned int SM4_BLOCKSIZE = 128;  // 128位 = 16字节
@@ -1469,18 +1522,26 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
   // 分配轮密钥空间
   uint8_t* rk = malloc((SM4_R + 4) * 4);  // 36个字 × 4字节
   bf128_t* rk_tag = malloc((SM4_R + 4) * 32 * sizeof(bf128_t));  // 36个字 × 32位
-  assert(rk);
-  assert(rk_tag);
+  if (!rk || !rk_tag) {
+    free(rk);
+    free(rk_tag);
+    return false;
+  }
   
   // 分配输入/输出空间
   uint8_t* in = malloc(SM4_BLOCKSIZE / 8);
   bf128_t* in_tag = malloc(SM4_BLOCKSIZE * sizeof(bf128_t));
   uint8_t* out = malloc(SM4_BLOCKSIZE / 8);
   bf128_t* out_tag = malloc(SM4_BLOCKSIZE * sizeof(bf128_t));
-  assert(in);
-  assert(in_tag);
-  assert(out);
-  assert(out_tag);
+  if (!in || !in_tag || !out || !out_tag) {
+    free(out_tag);
+    free(out);
+    free(in_tag);
+    free(in);
+    free(rk_tag);
+    free(rk);
+    return false;
+  }
   
   const unsigned int Lke = params->Lke;
 
@@ -1539,12 +1600,13 @@ static void sm4_SSS_constraints_prover(zk_hash_128_3_ctx* hasher, const uint8_t*
   free(in);
   free(rk_tag);
   free(rk);
+  return true;
 }
 
 /**
  * 完整的SM4约束系统 (Verifier版本)
  */
-static void sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t* w_key,
+static bool sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t* w_key,
                                          const uint8_t* owf_in, const uint8_t* owf_out,
                                          bf128_t delta, const faest_paramset_t* params) {
   const unsigned int SM4_BLOCKSIZE = 128;
@@ -1552,13 +1614,19 @@ static void sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t*
   
   // 分配轮密钥空间
   bf128_t* rk_key = malloc((SM4_R + 4) * 32 * sizeof(bf128_t));
-  assert(rk_key);
+  if (!rk_key) {
+    return false;
+  }
   
   // 分配输入/输出空间
   bf128_t* in_key = malloc(SM4_BLOCKSIZE * sizeof(bf128_t));
   bf128_t* out_key = malloc(SM4_BLOCKSIZE * sizeof(bf128_t));
-  assert(in_key);
-  assert(out_key);
+  if (!in_key || !out_key) {
+    free(out_key);
+    free(in_key);
+    free(rk_key);
+    return false;
+  }
   
   const unsigned int Lke = params->Lke;
 
@@ -1616,6 +1684,7 @@ static void sm4_SSS_constraints_verifier(zk_hash_128_ctx* hasher, const bf128_t*
   free(out_key);
   free(in_key);
   free(rk_key);
+  return true;
 }
 
 // ============================================================================
@@ -1729,7 +1798,10 @@ static inline unsigned int sm4_col_get_bit(const uint8_t* col, unsigned int row)
 static bf128_t* column_to_row_major_and_shrink_V_128(uint8_t** V, unsigned int ell,
                                                      const char* dbg_label) {
   bf128_t* w_tag = malloc((ell + 2 * 128) * sizeof(bf128_t));
-  assert(w_tag);
+  if (!w_tag) {
+    (void)dbg_label;
+    return NULL;
+  }
 
 
   for (unsigned int row = 0; row != ell + 2 * 128; ++row) {
@@ -1749,10 +1821,16 @@ static bf128_t* column_to_row_major_and_shrink_V_128_sm4(uint8_t** V, unsigned i
                                                          unsigned int ell_hat,
                                                          const char* dbg_label) {
   const unsigned int rows_to_keep = ell + 2 * lambda;
-  assert(ell_hat >= rows_to_keep);
+  if (ell_hat < rows_to_keep) {
+    (void)dbg_label;
+    return NULL;
+  }
 
   bf128_t* w_tag = malloc(rows_to_keep * sizeof(bf128_t));
-  assert(w_tag);
+  if (!w_tag) {
+    (void)dbg_label;
+    return NULL;
+  }
 
 
   for (unsigned int row = 0; row != rows_to_keep; ++row) {
@@ -1795,6 +1873,14 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   const unsigned int lambda = 128;  // SM4_128固定为128位
   const unsigned int ell_hat = ell + 3 * lambda + UNIVERSAL_HASH_B_BITS;
   const size_t chall2_len = 3u * (lambda / 8u) + 8u;
+  (void)chall2_len;
+
+  if (!sm4_check_embedding_constants_once()) {
+    memset(a0_tilde, 0, lambda / 8);
+    memset(a1_tilde, 0, lambda / 8);
+    memset(a2_tilde, 0, lambda / 8);
+    return;
+  }
 
 #if defined(DEBUG_SM4_CONSTRAINTS)
   fprintf(stderr, "[DBG-PROVER] ell=%u, Lke=%u, Lenc=%u, R=%u is_em=%d\n",
@@ -1827,7 +1913,13 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   zk_hash_128_3_init(&hasher, chall_2);
 
   // ::13 生成SM4约束
-  sm4_SSS_constraints_prover(&hasher, w, w_tag, owf_in, owf_out, params);
+  if (!sm4_SSS_constraints_prover(&hasher, w, w_tag, owf_in, owf_out, params)) {
+    memset(a0_tilde, 0, lambda / 8);
+    memset(a1_tilde, 0, lambda / 8);
+    memset(a2_tilde, 0, lambda / 8);
+    free(w_tag);
+    return;
+  }
 
   // Stage check: constraints generation complete
 
@@ -1848,6 +1940,12 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
   const unsigned int lambda = 128;
   const unsigned int ell_hat = ell + 3 * lambda + UNIVERSAL_HASH_B_BITS;
   const size_t chall2_len = 3u * (lambda / 8u) + 8u;
+  (void)chall2_len;
+
+  if (!sm4_check_embedding_constants_once()) {
+    memset(a0_tilde, 0, lambda / 8);
+    return;
+  }
 
   // ::1 加载delta
   bf128_t bf_delta = bf128_load(chall_3);
@@ -1879,7 +1977,11 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
 
   // ::12 验证SM4约束
-  sm4_SSS_constraints_verifier(&b_ctx, q_key, owf_in, owf_out, bf_delta, params);
+  if (!sm4_SSS_constraints_verifier(&b_ctx, q_key, owf_in, owf_out, bf_delta, params)) {
+    free(q_key);
+    memset(a0_tilde, 0, lambda / 8);
+    return;
+  }
 
   // Stage check: constraints verification complete
 
