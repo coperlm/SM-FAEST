@@ -360,6 +360,7 @@ faest_sources = files(
   'owf.c',
   'owf_sm4.c',
   'random_oracle.c',
+  'sm_random_oracle.c',
   'sm4.c',
   'universal_hashing.c',
   'utils.c',
@@ -391,6 +392,8 @@ if sha3 == 'auto'
   endif
 endif
 include_directories += [include_directories('sha3'), include_directories('sha3/' + sha3)]
+include_directories += [include_directories('GmSSL_Symmetric/include')]
+faest_sources += files('GmSSL_Symmetric/src/sm3.c')
 
 if sha3 == 's390-cpacf'
   defines += '-DWITH_SHAKE_S390_CPACF'

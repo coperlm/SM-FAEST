@@ -236,6 +236,141 @@ static bool bavc_commit_faest_em(bavc_t* bavc, const uint8_t* rootKey, const uin
   return true;
 }
 
+
+// BAVC.Commit for FAEST-SM4 — SM3 variant of bavc_commit_faest
+// Identical logic, H0/H1 replaced with SM_H0/SM_H1 (SM3-XOF).
+static bool bavc_commit_faest_sm4(bavc_t* bavc, const uint8_t* root_key, const uint8_t* iv,
+                                   const faest_paramset_t* params) {
+  const unsigned int lambda       = params->lambda;
+  const unsigned int L            = params->L;
+  const unsigned int lambda_bytes = lambda / 8;
+  const unsigned int com_size     = lambda_bytes * 3; // size of com_ij
+
+  SM_H0_context_t uhash_ctx;
+  SM_H0_init(&uhash_ctx, lambda);
+  SM_H0_update(&uhash_ctx, iv, IV_SIZE);
+  SM_H0_final_for_squeeze(&uhash_ctx);
+
+  SM_H1_context_t h1_com_ctx;
+  SM_H1_init(&h1_com_ctx, lambda);
+
+  // Generating the tree (k)
+  uint8_t* nodes = generate_seeds(root_key, iv, params);
+  if (!nodes) {
+    SM_H0_clear(&uhash_ctx);
+    return false;
+  }
+
+  // Initialzing stuff
+  bavc->h   = malloc(lambda_bytes * 2);
+  bavc->com = malloc(L * com_size);
+  bavc->sd  = malloc(L * lambda_bytes);
+  if (!bavc->h || !bavc->com || !bavc->sd) {
+    free(nodes);
+    free(bavc->h);
+    free(bavc->com);
+    free(bavc->sd);
+    bavc->h = NULL;
+    bavc->com = NULL;
+    bavc->sd = NULL;
+    SM_H0_clear(&uhash_ctx);
+    return false;
+  }
+
+  // Step: 1..3
+  bavc->k = NODE(nodes, 0, lambda_bytes);
+
+  // Step: 4..5
+  // compute commitments for remaining instances
+  for (unsigned int i = 0, offset = 0; i < params->tau; ++i) {
+    uint8_t uhash[MAX_LAMBDA_BYTES * 3];
+    SM_H0_squeeze(&uhash_ctx, uhash, 3 * lambda_bytes);
+
+    SM_H1_context_t h1_ctx;
+    SM_H1_init(&h1_ctx, lambda);
+
+    const unsigned int N_i = bavc_max_node_index(i, params->tau1, params->k);
+    for (unsigned int j = 0; j < N_i; ++j, ++offset) {
+      const unsigned int alpha = pos_in_tree(i, j, params);
+      faest_leaf_commit(bavc->sd + offset * lambda_bytes, bavc->com + offset * com_size,
+                        NODE(nodes, alpha, lambda_bytes), iv, i + L - 1, uhash, params);
+      SM_H1_update(&h1_ctx, bavc->com + offset * com_size, com_size);
+    }
+
+    uint8_t hi[MAX_LAMBDA_BYTES * 2];
+    // Step 11
+    SM_H1_final(&h1_ctx, hi, lambda_bytes * 2);
+    // Step 12
+    SM_H1_update(&h1_com_ctx, hi, lambda_bytes * 2);
+  }
+  SM_H0_clear(&uhash_ctx);
+
+  // Step 12
+  SM_H1_final(&h1_com_ctx, bavc->h, lambda_bytes * 2);
+  return true;
+}
+
+// BAVC.Commit for FAEST-EM-SM4 — SM3 variant of bavc_commit_faest_em
+static bool bavc_commit_faest_em_sm4(bavc_t* bavc, const uint8_t* rootKey, const uint8_t* iv,
+                                      const faest_paramset_t* params) {
+  const unsigned int lambda       = params->lambda;
+  const unsigned int L            = params->L;
+  const unsigned int lambda_bytes = lambda / 8;
+  const unsigned int com_size     = lambda_bytes * 2; // size of com_ij
+
+  SM_H1_context_t h1_com_ctx;
+  SM_H1_init(&h1_com_ctx, lambda);
+
+  // Generating the tree
+  uint8_t* nodes = generate_seeds(rootKey, iv, params);
+  if (!nodes) {
+    return false;
+  }
+
+  // Initialzing stuff
+  bavc->h   = malloc(lambda_bytes * 2);
+  bavc->com = malloc(L * com_size);
+  bavc->sd  = malloc(L * lambda_bytes);
+  if (!bavc->h || !bavc->com || !bavc->sd) {
+    free(nodes);
+    free(bavc->h);
+    free(bavc->com);
+    free(bavc->sd);
+    bavc->h = NULL;
+    bavc->com = NULL;
+    bavc->sd = NULL;
+    return false;
+  }
+
+  // Step: 1..3
+  bavc->k = NODE(nodes, 0, lambda_bytes);
+
+  // Step: 4..5
+  // compute commitments for remaining instances
+  for (unsigned int i = 0, offset = 0; i < params->tau; ++i) {
+    SM_H1_context_t h1_ctx;
+    SM_H1_init(&h1_ctx, lambda);
+
+    const unsigned int N_i = bavc_max_node_index(i, params->tau1, params->k);
+    for (unsigned int j = 0; j < N_i; ++j, ++offset) {
+      const unsigned int alpha = pos_in_tree(i, j, params);
+      faest_em_leaf_commit(bavc->sd + offset * lambda_bytes, bavc->com + offset * com_size,
+                           NODE(nodes, alpha, lambda_bytes), iv, i + L - 1, params);
+      SM_H1_update(&h1_ctx, bavc->com + offset * com_size, com_size);
+    }
+
+    uint8_t hi[MAX_LAMBDA_BYTES * 2];
+    // Step 11
+    SM_H1_final(&h1_ctx, hi, lambda_bytes * 2);
+    // Step 12
+    SM_H1_update(&h1_com_ctx, hi, lambda_bytes * 2);
+  }
+
+  // Step 12
+  SM_H1_final(&h1_com_ctx, bavc->h, lambda_bytes * 2);
+  return true;
+}
+
 bool bavc_commit(bavc_t* bavc, const uint8_t* root_key, const uint8_t* iv,
                  const faest_paramset_t* params) {
   bavc->h = NULL;
@@ -243,9 +378,13 @@ bool bavc_commit(bavc_t* bavc, const uint8_t* root_key, const uint8_t* iv,
   bavc->com = NULL;
   bavc->sd = NULL;
   if (faest_is_em(params)) {
-    return bavc_commit_faest_em(bavc, root_key, iv, params);
+    return faest_is_sm4(params)
+               ? bavc_commit_faest_em_sm4(bavc, root_key, iv, params)
+               : bavc_commit_faest_em(bavc, root_key, iv, params);
   } else {
-    return bavc_commit_faest(bavc, root_key, iv, params);
+    return faest_is_sm4(params)
+               ? bavc_commit_faest_sm4(bavc, root_key, iv, params)
+               : bavc_commit_faest(bavc, root_key, iv, params);
   }
 }
 
@@ -504,10 +643,153 @@ static bool bavc_reconstruct_faest_em(bavc_rec_t* bavc_rec, const uint8_t* decom
   return true;
 }
 
+
+// BAVC.Reconstruct for FAEST-SM4 — SM3 variant of bavc_reconstruct_faest
+static bool bavc_reconstruct_faest_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
+                                        const uint16_t* i_delta, const uint8_t* iv,
+                                        const faest_paramset_t* params) {
+  // Initializing
+  const unsigned int lambda       = params->lambda;
+  const unsigned int L            = params->L;
+  const unsigned int lambda_bytes = lambda / 8;
+  const unsigned int k            = params->k;
+  const unsigned int tau          = params->tau;
+  const unsigned int tau_1        = params->tau1;
+  const unsigned int com_size     = lambda_bytes * 3; // size of com_ij
+
+  // Step 6
+  uint8_t* s = calloc((2 * L - 1 + 7) / 8, 1);
+  if (!s) {
+    return false;
+  }
+  uint8_t* keys = calloc(2 * params->L - 1, lambda_bytes);
+  if (!keys) {
+    free(s);
+    return false;
+  }
+
+  if (!reconstruct_keys(s, keys, decom_i, i_delta, iv, params)) {
+    free(keys);
+    free(s);
+    return false;
+  }
+
+  SM_H0_context_t uhash_ctx;
+  SM_H0_init(&uhash_ctx, lambda);
+  SM_H0_update(&uhash_ctx, iv, IV_SIZE);
+  SM_H0_final_for_squeeze(&uhash_ctx);
+
+  SM_H1_context_t h1_com_ctx;
+  SM_H1_init(&h1_com_ctx, lambda);
+
+  for (unsigned int i = 0, offset = 0; i != tau; ++i) {
+    uint8_t uhash[MAX_LAMBDA_BYTES * 3];
+    SM_H0_squeeze(&uhash_ctx, uhash, com_size);
+
+    SM_H1_context_t h1_ctx;
+    SM_H1_init(&h1_ctx, lambda);
+
+    const unsigned int N_i = bavc_max_node_index(i, tau_1, k);
+    for (unsigned int j = 0; j != N_i; ++j) {
+      const unsigned int alpha = pos_in_tree(i, j, params);
+      if (ptr_get_bit(s, alpha)) {
+        SM_H1_update(&h1_ctx, decom_i + i * com_size, com_size);
+      } else {
+        uint8_t com[3 * MAX_LAMBDA_BYTES];
+        faest_leaf_commit(bavc_rec->s + offset * lambda_bytes, com, keys + alpha * lambda_bytes, iv,
+                          i + L - 1, uhash, params);
+        ++offset;
+        SM_H1_update(&h1_ctx, com, com_size);
+      }
+    }
+
+    uint8_t hi[MAX_LAMBDA_BYTES * 2];
+    SM_H1_final(&h1_ctx, hi, lambda_bytes * 2);
+    SM_H1_update(&h1_com_ctx, hi, lambda_bytes * 2);
+  }
+  SM_H0_clear(&uhash_ctx);
+
+  SM_H1_final(&h1_com_ctx, bavc_rec->h, lambda_bytes * 2);
+
+  free(keys);
+  free(s);
+  return true;
+}
+
+// BAVC.Reconstruct for FAEST-EM-SM4 — SM3 variant of bavc_reconstruct_faest_em
+static bool bavc_reconstruct_faest_em_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i,
+                                           const uint16_t* i_delta, const uint8_t* iv,
+                                           const faest_paramset_t* params) {
+  // Initializing
+  const unsigned int lambda       = params->lambda;
+  const unsigned int L            = params->L;
+  const unsigned int lambda_bytes = lambda / 8;
+  const unsigned int k            = params->k;
+  const unsigned int tau          = params->tau;
+  const unsigned int tau_1        = params->tau1;
+  const unsigned int com_size     = lambda_bytes * 2; // size of com_ij
+
+  // Step 6
+  uint8_t* s = calloc((2 * L - 1 + 7) / 8, 1);
+  if (!s) {
+    return false;
+  }
+  uint8_t* keys = calloc(2 * params->L - 1, lambda_bytes);
+  if (!keys) {
+    free(s);
+    return false;
+  }
+
+  // Step 7..10
+  if (!reconstruct_keys(s, keys, decom_i, i_delta, iv, params)) {
+    free(keys);
+    free(s);
+    return false;
+  }
+
+  SM_H1_context_t h1_com_ctx;
+  SM_H1_init(&h1_com_ctx, lambda);
+
+  for (unsigned int i = 0, offset = 0; i != tau; ++i) {
+    SM_H1_context_t h1_ctx;
+    SM_H1_init(&h1_ctx, lambda);
+
+    const unsigned int N_i = bavc_max_node_index(i, tau_1, k);
+    for (unsigned int j = 0; j != N_i; ++j) {
+      const unsigned int alpha = pos_in_tree(i, j, params);
+      if (ptr_get_bit(s, alpha)) {
+        SM_H1_update(&h1_ctx, decom_i + i * com_size, com_size);
+      } else {
+        uint8_t com[2 * MAX_LAMBDA_BYTES];
+        faest_em_leaf_commit(bavc_rec->s + offset * lambda_bytes, com, keys + alpha * lambda_bytes,
+                             iv, i + L - 1, params);
+        ++offset;
+        SM_H1_update(&h1_ctx, com, com_size);
+      }
+    }
+
+    uint8_t hi[MAX_LAMBDA_BYTES * 2];
+    SM_H1_final(&h1_ctx, hi, lambda_bytes * 2);
+    SM_H1_update(&h1_com_ctx, hi, lambda_bytes * 2);
+  }
+
+  SM_H1_final(&h1_com_ctx, bavc_rec->h, lambda_bytes * 2);
+
+  free(keys);
+  free(s);
+  return true;
+}
+
 bool bavc_reconstruct(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,
                       const uint8_t* iv, const faest_paramset_t* params) {
-  return faest_is_em(params) ? bavc_reconstruct_faest_em(bavc_rec, decom_i, i_delta, iv, params)
-                             : bavc_reconstruct_faest(bavc_rec, decom_i, i_delta, iv, params);
+  if (faest_is_em(params)) {
+    return faest_is_sm4(params)
+               ? bavc_reconstruct_faest_em_sm4(bavc_rec, decom_i, i_delta, iv, params)
+               : bavc_reconstruct_faest_em(bavc_rec, decom_i, i_delta, iv, params);
+  }
+  return faest_is_sm4(params)
+             ? bavc_reconstruct_faest_sm4(bavc_rec, decom_i, i_delta, iv, params)
+             : bavc_reconstruct_faest(bavc_rec, decom_i, i_delta, iv, params);
 }
 
 bool bavc_reconstruct_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,

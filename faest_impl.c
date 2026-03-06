@@ -174,28 +174,57 @@ ATTR_PURE static inline const uint8_t* dsignature_ctr(const uint8_t* base_ptr,
 // FAEST.Sign: line 3
 static void hash_mu(uint8_t* mu, const uint8_t* owf_input, size_t owf_input_size,
                     const uint8_t* owf_output, size_t owf_output_size, const uint8_t* msg,
-                    size_t msglen, unsigned int lambda) {
-  H2_context_t h1_ctx;
-  H2_init(&h1_ctx, lambda);
-  H2_update(&h1_ctx, owf_input, owf_input_size);
-  H2_update(&h1_ctx, owf_output, owf_output_size);
-  H2_update(&h1_ctx, msg, msglen);
-  H2_0_final(&h1_ctx, mu, 2 * lambda / 8);
+                    size_t msglen, const faest_paramset_t* params) {
+  const unsigned int lambda = params->lambda;
+  if (faest_is_sm4(params)) {
+    SM_H2_context_t h1_ctx;
+    SM_H2_0_init(&h1_ctx, lambda);
+    SM_H2_update(&h1_ctx, owf_input, owf_input_size);
+    SM_H2_update(&h1_ctx, owf_output, owf_output_size);
+    SM_H2_update(&h1_ctx, msg, msglen);
+    SM_H2_final(&h1_ctx, mu, 2 * lambda / 8);
+  } else {
+    H2_context_t h1_ctx;
+    H2_init(&h1_ctx, lambda);
+    H2_update(&h1_ctx, owf_input, owf_input_size);
+    H2_update(&h1_ctx, owf_output, owf_output_size);
+    H2_update(&h1_ctx, msg, msglen);
+    H2_0_final(&h1_ctx, mu, 2 * lambda / 8);
+  }
 }
 
-static void hash_iv(uint8_t* iv, const uint8_t* iv_pre, unsigned int lambda) {
-  H4_context_t h4_ctx;
-  H4_init(&h4_ctx, lambda);
-  H4_update(&h4_ctx, iv_pre);
-  H4_final(&h4_ctx, iv);
+static void hash_iv(uint8_t* iv, const uint8_t* iv_pre, const faest_paramset_t* params) {
+  const unsigned int lambda = params->lambda;
+  if (faest_is_sm4(params)) {
+    SM_H4_context_t h4_ctx;
+    SM_H4_init(&h4_ctx, lambda);
+    SM_H4_update(&h4_ctx, iv_pre);
+    SM_H4_final(&h4_ctx, iv);
+  } else {
+    H4_context_t h4_ctx;
+    H4_init(&h4_ctx, lambda);
+    H4_update(&h4_ctx, iv_pre);
+    H4_final(&h4_ctx, iv);
+  }
 }
 
 // FAEST.Sign: line 4 + line 5
 static void hash_r_iv(uint8_t* root_key, uint8_t* iv_pre, uint8_t* iv, const uint8_t* owf_key,
-                      const uint8_t* mu, const uint8_t* rho, size_t rho_size, unsigned int lambda) {
+                      const uint8_t* mu, const uint8_t* rho, size_t rho_size,
+                      const faest_paramset_t* params) {
+  const unsigned int lambda = params->lambda;
   const unsigned int lambda_bytes = lambda / 8;
 
-  {
+  if (faest_is_sm4(params)) {
+    SM_H3_context_t h3_ctx;
+    SM_H3_init(&h3_ctx, lambda);
+    SM_H3_update(&h3_ctx, owf_key, lambda_bytes);
+    SM_H3_update(&h3_ctx, mu, lambda_bytes * 2);
+    if (rho && rho_size) {
+      SM_H3_update(&h3_ctx, rho, rho_size);
+    }
+    SM_H3_final(&h3_ctx, root_key, lambda_bytes, iv_pre);
+  } else {
     H3_context_t h3_ctx;
     H3_init(&h3_ctx, lambda);
     H3_update(&h3_ctx, owf_key, lambda_bytes);
@@ -206,80 +235,132 @@ static void hash_r_iv(uint8_t* root_key, uint8_t* iv_pre, uint8_t* iv, const uin
     H3_final(&h3_ctx, root_key, lambda_bytes, iv_pre);
   }
 
-  hash_iv(iv, iv_pre, lambda);
+  hash_iv(iv, iv_pre, params);
 }
 
 static void hash_challenge_1(uint8_t* chall_1, const uint8_t* mu, const uint8_t* hcom,
-                             const uint8_t* c, const uint8_t* iv, unsigned int lambda,
+                             const uint8_t* c, const uint8_t* iv,
+                             const faest_paramset_t* params,
                              unsigned int ell, unsigned int tau) {
+  const unsigned int lambda       = params->lambda;
   const unsigned int lambda_bytes  = lambda / 8;
   const unsigned int ell_hat_bytes = ell / 8 + lambda_bytes * 3 + UNIVERSAL_HASH_B;
 
-  H2_context_t h2_ctx;
-  H2_init(&h2_ctx, lambda);
-  H2_update(&h2_ctx, mu, lambda_bytes * 2);
-  H2_update(&h2_ctx, hcom, lambda_bytes * 2);
-  H2_update(&h2_ctx, c, ell_hat_bytes * (tau - 1));
-  H2_update(&h2_ctx, iv, IV_SIZE);
-  H2_1_final(&h2_ctx, chall_1, 5 * lambda_bytes + 8);
+  if (faest_is_sm4(params)) {
+    SM_H2_context_t h2_ctx;
+    SM_H2_1_init(&h2_ctx, lambda);
+    SM_H2_update(&h2_ctx, mu, lambda_bytes * 2);
+    SM_H2_update(&h2_ctx, hcom, lambda_bytes * 2);
+    SM_H2_update(&h2_ctx, c, ell_hat_bytes * (tau - 1));
+    SM_H2_update(&h2_ctx, iv, IV_SIZE);
+    SM_H2_final(&h2_ctx, chall_1, 5 * lambda_bytes + 8);
+  } else {
+    H2_context_t h2_ctx;
+    H2_init(&h2_ctx, lambda);
+    H2_update(&h2_ctx, mu, lambda_bytes * 2);
+    H2_update(&h2_ctx, hcom, lambda_bytes * 2);
+    H2_update(&h2_ctx, c, ell_hat_bytes * (tau - 1));
+    H2_update(&h2_ctx, iv, IV_SIZE);
+    H2_1_final(&h2_ctx, chall_1, 5 * lambda_bytes + 8);
+  }
 }
 
-static void hash_challenge_2_init(H2_context_t* h2_ctx, const uint8_t* chall_1,
-                                  const uint8_t* u_tilde, unsigned int lambda) {
+static void hash_challenge_2_init(H2_uni_context_t* h2_ctx, const uint8_t* chall_1,
+                                  const uint8_t* u_tilde, const faest_paramset_t* params) {
+  const unsigned int lambda        = params->lambda;
   const unsigned int lambda_bytes  = lambda / 8;
   const unsigned int u_tilde_bytes = lambda_bytes + UNIVERSAL_HASH_B;
 
-  H2_init(h2_ctx, lambda);
-  H2_update(h2_ctx, chall_1, 5 * lambda_bytes + 8);
-  H2_update(h2_ctx, u_tilde, u_tilde_bytes);
+  h2_ctx->is_sm4 = faest_is_sm4(params);
+  if (h2_ctx->is_sm4) {
+    SM_H2_2_init(&h2_ctx->sm3, lambda);
+    SM_H2_update(&h2_ctx->sm3, chall_1, 5 * lambda_bytes + 8);
+    SM_H2_update(&h2_ctx->sm3, u_tilde, u_tilde_bytes);
+  } else {
+    H2_init(&h2_ctx->shake, lambda);
+    H2_update(&h2_ctx->shake, chall_1, 5 * lambda_bytes + 8);
+    H2_update(&h2_ctx->shake, u_tilde, u_tilde_bytes);
+  }
 }
 
-static void hash_challenge_2_update_v_tilde(H2_context_t* h2_ctx, const uint8_t* v_tilde,
+static void hash_challenge_2_update_v_tilde(H2_uni_context_t* h2_ctx, const uint8_t* v_tilde,
                                             unsigned int lambda) {
   const unsigned int lambda_bytes  = lambda / 8;
   const unsigned int v_tilde_bytes = lambda_bytes + UNIVERSAL_HASH_B;
 
-  H2_update(h2_ctx, v_tilde, v_tilde_bytes);
+  if (h2_ctx->is_sm4) {
+    SM_H2_update(&h2_ctx->sm3, v_tilde, v_tilde_bytes);
+  } else {
+    H2_update(&h2_ctx->shake, v_tilde, v_tilde_bytes);
+  }
 }
 
-static void hash_challenge_2_finalize(uint8_t* chall_2, H2_context_t* h2_ctx, const uint8_t* d,
-                                      const unsigned lambda, unsigned int ell) {
+static void hash_challenge_2_finalize(uint8_t* chall_2, H2_uni_context_t* h2_ctx,
+                                      const uint8_t* d, const unsigned lambda,
+                                      unsigned int ell) {
   const unsigned int lambda_bytes = lambda / 8;
   const unsigned int ell_bytes    = ell / 8;
 
-  H2_update(h2_ctx, d, ell_bytes);
-  H2_2_final(h2_ctx, chall_2, 3 * lambda_bytes + 8);
+  if (h2_ctx->is_sm4) {
+    SM_H2_update(&h2_ctx->sm3, d, ell_bytes);
+    SM_H2_final(&h2_ctx->sm3, chall_2, 3 * lambda_bytes + 8);
+  } else {
+    H2_update(&h2_ctx->shake, d, ell_bytes);
+    H2_2_final(&h2_ctx->shake, chall_2, 3 * lambda_bytes + 8);
+  }
 }
 
-static void hash_challenge_3_init(H2_context_t* h2_ctx, const uint8_t* chall_2,
+static void hash_challenge_3_init(H2_uni_context_t* h2_ctx, const uint8_t* chall_2,
                                   const uint8_t* a0_tilde, const uint8_t* a1_tilde,
-                                  const uint8_t* a2_tilde, unsigned int lambda) {
+                                  const uint8_t* a2_tilde, const faest_paramset_t* params) {
+  const unsigned int lambda       = params->lambda;
   const unsigned int lambda_bytes = lambda / 8;
 
-  H2_init(h2_ctx, lambda);
-  H2_update(h2_ctx, chall_2, 3 * lambda_bytes + 8);
-  H2_update(h2_ctx, a0_tilde, lambda_bytes);
-  H2_update(h2_ctx, a1_tilde, lambda_bytes);
-  H2_update(h2_ctx, a2_tilde, lambda_bytes);
+  h2_ctx->is_sm4 = faest_is_sm4(params);
+  if (h2_ctx->is_sm4) {
+    SM_H2_3_init(&h2_ctx->sm3, lambda);
+    SM_H2_update(&h2_ctx->sm3, chall_2, 3 * lambda_bytes + 8);
+    SM_H2_update(&h2_ctx->sm3, a0_tilde, lambda_bytes);
+    SM_H2_update(&h2_ctx->sm3, a1_tilde, lambda_bytes);
+    SM_H2_update(&h2_ctx->sm3, a2_tilde, lambda_bytes);
+  } else {
+    H2_init(&h2_ctx->shake, lambda);
+    H2_update(&h2_ctx->shake, chall_2, 3 * lambda_bytes + 8);
+    H2_update(&h2_ctx->shake, a0_tilde, lambda_bytes);
+    H2_update(&h2_ctx->shake, a1_tilde, lambda_bytes);
+    H2_update(&h2_ctx->shake, a2_tilde, lambda_bytes);
+  }
 }
 
-static void hash_challenge_3_final(uint8_t* chall_3, const H2_context_t* ctx, uint32_t ctr,
+static void hash_challenge_3_final(uint8_t* chall_3, const H2_uni_context_t* ctx, uint32_t ctr,
                                    unsigned int lambda) {
   const unsigned int lambda_bytes = lambda / 8;
 
-  H2_context_t ctx_copy;
-  H2_copy(&ctx_copy, ctx);
-  H2_update_u32_le(&ctx_copy, ctr);
-  H2_3_final(&ctx_copy, chall_3, lambda_bytes);
+  if (ctx->is_sm4) {
+    SM_H2_context_t ctx_copy;
+    SM_H2_copy(&ctx_copy, &ctx->sm3);
+    SM_H2_update_u32_le(&ctx_copy, ctr);
+    SM_H2_final(&ctx_copy, chall_3, lambda_bytes);
+  } else {
+    H2_context_t ctx_copy;
+    H2_copy(&ctx_copy, &ctx->shake);
+    H2_update_u32_le(&ctx_copy, ctr);
+    H2_3_final(&ctx_copy, chall_3, lambda_bytes);
+  }
 }
 
 static void hash_challenge_3(uint8_t* chall_3, const uint8_t* chall_2, const uint8_t* a0_tilde,
                              const uint8_t* a1_tilde, const uint8_t* a2_tilde, const uint8_t* ctr,
-                             unsigned int lambda) {
-  H2_context_t h2_ctx;
-  hash_challenge_3_init(&h2_ctx, chall_2, a0_tilde, a1_tilde, a2_tilde, lambda);
-  H2_update(&h2_ctx, ctr, sizeof(uint32_t));
-  H2_3_final(&h2_ctx, chall_3, lambda / 8);
+                             const faest_paramset_t* params) {
+  H2_uni_context_t h2_ctx;
+  hash_challenge_3_init(&h2_ctx, chall_2, a0_tilde, a1_tilde, a2_tilde, params);
+  if (h2_ctx.is_sm4) {
+    SM_H2_update(&h2_ctx.sm3, ctr, sizeof(uint32_t));
+    SM_H2_final(&h2_ctx.sm3, chall_3, params->lambda / 8);
+  } else {
+    H2_update(&h2_ctx.shake, ctr, sizeof(uint32_t));
+    H2_3_final(&h2_ctx.shake, chall_3, params->lambda / 8);
+  }
 }
 
 static bool check_challenge_3(const uint8_t* chall_3, unsigned int start, unsigned int lambda) {
@@ -373,11 +454,11 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   // ::3
   uint8_t mu[MAX_LAMBDA_BYTES * 2];
   hash_mu(mu, owf_input, params->owf_input_size, owf_output, params->owf_output_size, msg, msg_len,
-          lambda);
+          params);
 
   // ::4-5
   uint8_t rootkey[MAX_LAMBDA_BYTES], iv[IV_SIZE];
-  hash_r_iv(rootkey, signature_iv_pre(sig, params), iv, owf_key, mu, rho, rholen, lambda);
+  hash_r_iv(rootkey, signature_iv_pre(sig, params), iv, owf_key, mu, rho, rholen, params);
 
   // ::6-7
   bavc_t bavc = {0};
@@ -429,7 +510,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
 
   // ::8
   uint8_t chall_1[(5 * MAX_LAMBDA_BYTES) + 8];
-  hash_challenge_1(chall_1, mu, bavc.h, signature_c(sig, 0, params), iv, lambda, ell, tau);
+  hash_challenge_1(chall_1, mu, bavc.h, signature_c(sig, 0, params), iv, params, ell, tau);
 
   // ::9-10
   vole_hash(signature_u_tilde(sig, params), chall_1, u, ell, lambda);
@@ -438,8 +519,8 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   // To save memory consumption, the chall_2 is computed in an
   // Init-Update-Finalize style as V_tilde is only fed into to the hash and not
   // used elsewhere.
-  H2_context_t chall_2_ctx;
-  hash_challenge_2_init(&chall_2_ctx, chall_1, signature_u_tilde(sig, params), lambda);
+  H2_uni_context_t chall_2_ctx;
+  hash_challenge_2_init(&chall_2_ctx, chall_1, signature_u_tilde(sig, params), params);
   {
     uint8_t V_tilde[MAX_LAMBDA_BYTES + UNIVERSAL_HASH_B];
     for (unsigned int i = 0; i < lambda; ++i) {
@@ -478,9 +559,9 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   u = NULL;
 
   // ::21-22
-  H2_context_t chall_3_ctx;
+  H2_uni_context_t chall_3_ctx;
   hash_challenge_3_init(&chall_3_ctx, chall_2, a0_tilde, signature_a1_tilde(sig, params),
-                        signature_a2_tilde(sig, params), lambda);
+                        signature_a2_tilde(sig, params), params);
 
   uint32_t ctr = 0;
   uint8_t chall_3_tmp[MAX_LAMBDA_BYTES];  // 临时buffer for challenge_3
@@ -491,7 +572,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   const unsigned int decom_i_size = com_size * tau + params->T_open * lambda_bytes;
   uint8_t* decom_i_tmp = malloc(decom_i_size);  // 临时buffer for decom_i
   if (!decom_i_tmp) {
-    hash_clear(&chall_3_ctx);
+    H2_uni_clear(&chall_3_ctx);
     if (bavc_initialized) {
       bavc_clear(&bavc);
     }
@@ -545,7 +626,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   free(decom_i_tmp);
   faest_explicit_bzero(decoded_chall_3, sizeof(decoded_chall_3));
   faest_explicit_bzero(chall_3_tmp, sizeof(chall_3_tmp));
-  hash_clear(&chall_3_ctx);
+  H2_uni_clear(&chall_3_ctx);
   if (bavc_initialized) {
     bavc_clear(&bavc);
   }
@@ -580,11 +661,11 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // ::2
   uint8_t mu[MAX_LAMBDA_BYTES * 2];
   hash_mu(mu, owf_input, params->owf_input_size, owf_output, params->owf_output_size, msg, msglen,
-          lambda);
+          params);
 
   // ::3
   uint8_t iv[IV_SIZE];
-  hash_iv(iv, dsignature_iv_pre(sig, params), lambda);
+  hash_iv(iv, dsignature_iv_pre(sig, params), params);
 
   // Step: 6-7
   // q is a \hat \ell \times \lambda matrix
@@ -618,11 +699,11 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
 
   // ::10
   uint8_t chall_1[5 * MAX_LAMBDA_BYTES + 8];
-  hash_challenge_1(chall_1, mu, hcom, dsignature_c(sig, 0, params), iv, lambda, ell, tau);
+  hash_challenge_1(chall_1, mu, hcom, dsignature_c(sig, 0, params), iv, params, ell, tau);
 
   // Step 12, 14 and 15
-  H2_context_t chall_2_ctx;
-  hash_challenge_2_init(&chall_2_ctx, chall_1, dsignature_u_tilde(sig, params), lambda);
+  H2_uni_context_t chall_2_ctx;
+  hash_challenge_2_init(&chall_2_ctx, chall_1, dsignature_u_tilde(sig, params), params);
   {
     const uint8_t* chall_3 = dsignature_chall_3(sig, params);
     uint8_t Q_tilde[MAX_LAMBDA_BYTES + UNIVERSAL_HASH_B];
@@ -660,7 +741,7 @@ int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const ui
   // Step: 20
   uint8_t chall_3[MAX_LAMBDA_BYTES];
   hash_challenge_3(chall_3, chall_2, a0_tilde, dsignature_a1_tilde(sig, params),
-                   dsignature_a2_tilde(sig, params), dsignature_ctr(sig, params), lambda);
+                   dsignature_a2_tilde(sig, params), dsignature_ctr(sig, params), params);
 
   // Step 21
   int result = memcmp(chall_3, dsignature_chall_3(sig, params), lambda_bytes);
