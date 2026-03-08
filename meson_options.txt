@@ -1,13 +1,13 @@
 option(
   'openssl',
   type: 'feature',
-  value: 'auto',
+  value: 'enabled',
   description: 'Use OpenSSL for AES-CTR implementation',
 )
 option(
   'aesni',
   type: 'feature',
-  value: 'auto',
+  value: 'enabled',
   description: 'Use ISA extensions for AES',
 )
 option(

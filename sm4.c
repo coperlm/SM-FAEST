@@ -11,6 +11,7 @@
 #include "compat.h"
 #include "utils.h"
 
+#include <assert.h>
 #include <string.h>
 
 // ============ SM4 S-box (国密标准 GM/T 0002-2012) ============
@@ -69,18 +70,18 @@ uint32_t sm4_tau(uint32_t a) {
 }
 
 // ============ 循环左移 ============
-static inline uint32_t rotl32(uint32_t x, unsigned int n) {
+static inline uint32_t sm4_rotl32(uint32_t x, unsigned int n) {
   return (x << n) | (x >> (32 - n));
 }
 
 // ============ 线性变换 L (用于加密): L(B) = B ⊕ (B<<<2) ⊕ (B<<<10) ⊕ (B<<<18) ⊕ (B<<<24) ============
 uint32_t sm4_linear_l(uint32_t b) {
-  return b ^ rotl32(b, 2) ^ rotl32(b, 10) ^ rotl32(b, 18) ^ rotl32(b, 24);
+  return b ^ sm4_rotl32(b, 2) ^ sm4_rotl32(b, 10) ^ sm4_rotl32(b, 18) ^ sm4_rotl32(b, 24);
 }
 
 // ============ 线性变换 L' (用于密钥扩展): L'(B) = B ⊕ (B<<<13) ⊕ (B<<<23) ============
 uint32_t sm4_linear_l_prime(uint32_t b) {
-  return b ^ rotl32(b, 13) ^ rotl32(b, 23);
+  return b ^ sm4_rotl32(b, 13) ^ sm4_rotl32(b, 23);
 }
 
 // ============ T 变换 (加密用): T(X) = L(τ(X)) ============
@@ -137,55 +138,228 @@ void sm4_increment_iv(uint8_t* iv)
 static inline void sm4_increment_iv(uint8_t* iv)
 #endif
 {
-  uint32_t iv0;
-  memcpy(&iv0, iv, sizeof(uint32_t));
-  iv0 = htole32(le32toh(iv0) + 1);
-  memcpy(iv, &iv0, sizeof(uint32_t));
+    /* increment low‑order 32‑bit word only; carry is truncated at 4 bytes.
+     this matches both the SM4 and PRG_SM4 unit tests. */
+  uint32_t counter;
+  memcpy(&counter, iv, sizeof(counter));
+  counter = htole32(le32toh(counter) + 1);
+  memcpy(iv, &counter, sizeof(counter));
 }
 
 // ============ PRG 实现（SM4-CTR 模式）============
 
-// TODO: 这部分需要从 aes.c 迁移并适配 SM4
-// 基础 PRG 函数
-void prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-         unsigned int bits, size_t outlen) {
-  // TODO: 实现 SM4-CTR 模式
-  (void)key;
-  (void)iv;
-  (void)tweak;
-  (void)out;
-  (void)bits;
-  (void)outlen;
+// 辅助函数：将 tweak 加到 IV 的高位字上
+static inline void add_to_upper_word(uint8_t* iv, uint32_t tweak) {
+  uint32_t iv0;
+  memcpy(&iv0, iv + 12, sizeof(uint32_t));
+  iv0 = htole32(le32toh(iv0) + tweak);
+  memcpy(iv + 12, &iv0, sizeof(uint32_t));
+}
+
+// SM4-CTR 模式的 PRG 实现
+void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+             unsigned int bits, size_t outlen) {
+  assert(bits == 128 && "sm4_prg: only 128-bit lambda is supported");
+  /* tweak is added modulo 2^32 to the upper IV word; no overflow check needed */
   
-  // 临时占位，防止编译错误
-  memset(out, 0, outlen);
+  // 初始化轮密钥
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, key);
+  
+  // 准备内部 IV（加上 tweak）
+  uint8_t internal_iv[SM4_BLOCK_SIZE];
+  memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
+  add_to_upper_word(internal_iv, tweak);
+  
+  // CTR 模式：生成所需数量的块
+  for (size_t idx = 0; idx < outlen / SM4_BLOCK_SIZE; idx++, out += SM4_BLOCK_SIZE) {
+    sm4_encrypt_block(&rk, internal_iv, out);
+    sm4_increment_iv(internal_iv);
+  }
+  
+  // 处理不完整的最后一块
+  if (outlen % SM4_BLOCK_SIZE) {
+    uint8_t last_block[SM4_BLOCK_SIZE];
+    sm4_encrypt_block(&rk, internal_iv, last_block);
+    memcpy(out, last_block, outlen % SM4_BLOCK_SIZE);
+    faest_explicit_bzero(last_block, sizeof(last_block));
+  }
+
+  faest_explicit_bzero(&rk, sizeof(rk));
+  faest_explicit_bzero(internal_iv, sizeof(internal_iv));
 }
 
-void prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-                  unsigned int bits) {
-  // TODO: 调用 prg 生成 2λ 位
+void sm4_prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+                      unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
-  prg(key, iv, tweak, out, bits, 2 * lambda_bytes);
+  sm4_prg(key, iv, tweak, out, bits, 2 * lambda_bytes);
 }
 
-void prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
-                  unsigned int bits) {
-  // TODO: 调用 prg 生成 4λ 位
+void sm4_prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
+                      unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
-  prg(key, iv, tweak, out, bits, 4 * lambda_bytes);
+  sm4_prg(key, iv, tweak, out, bits, 4 * lambda_bytes);
+}
+
+// ============ 辅助函数：逆仿射（用于见证）============
+static inline uint8_t sm4_rotl8(uint8_t v, unsigned int n) {
+  return (uint8_t)((v << n) | (v >> (8 - n)));
+}
+
+static inline uint8_t sm4_inverse_affine(uint8_t sbox_out) {
+  uint8_t y = sbox_out ^ 0xD6;  // 0xD6 是 SM4 仿射常数 C
+  return (uint8_t)(sm4_rotl8(y, 7) ^ sm4_rotl8(y, 5) ^ sm4_rotl8(y, 1));
+}
+
+/**
+ * SM4 GF(2^4) 逆范数（仅用于 ZK 约束见证）
+ * 计算 x^238 = x^(-17) in SM4 GF(2^8)，并提取位 (0,2,4,5) 得到4位值
+ * 这是 GF(2^4)/GF(2) 的多项式基坐标表示，对应基 {1, β, β², β³} (β=0x0c)
+ */
+uint8_t sm4_invnorm(uint8_t x) {
+  // 238 = 0b11101110: compute x^238 using square-and-multiply in SM4 GF(2^8)
+  uint8_t y = bf8_square_sm4(x);        // x^2
+  x         = bf8_square_sm4(y);        // x^4
+  y         = bf8_mul_sm4(x, y);        // x^6
+  x         = bf8_square_sm4(x);        // x^8
+  y         = bf8_mul_sm4(x, y);        // x^14
+  x         = bf8_square_sm4(x);        // x^16
+  x         = bf8_square_sm4(x);        // x^32
+  y         = bf8_mul_sm4(x, y);        // x^46
+  x         = bf8_square_sm4(x);        // x^64
+  y         = bf8_mul_sm4(x, y);        // x^110
+  x         = bf8_square_sm4(x);        // x^128
+  x         = bf8_mul_sm4(x, y);        // x^238
+  // Extract bits at positions (0, 2, 4, 5) → output bits (0, 1, 2, 3)
+  // Basis: bit0→coeff of 1, bit1→coeff of β=0x0c, bit2→coeff of β²=0x50, bit3→coeff of β³=0x2a
+  return set_bit(get_bit(x, 0), 0) ^ set_bit(get_bit(x, 2), 1) ^
+         set_bit(get_bit(x, 4), 2) ^ set_bit(get_bit(x, 5), 3);
 }
 
 // ============ 扩展见证（ZK 证明用）============
 void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
                         const faest_paramset_t* params) {
-  // TODO: 实现见证扩展
-  // 这是 FAEST 证明系统的核心部分，需要记录：
-  // 1. 所有轮密钥
-  // 2. 每轮的中间状态
-  // 3. S-box 的输入输出
+  const bool is_em = (params->Ske == 0); // 检查是否为 EM 模式
+#if !defined(NDEBUG)
+  uint8_t* const w_out = w;
+#endif
+
+
+  const uint8_t* actual_key = key;
+  const uint8_t* actual_in  = in;
+
   
-  (void)w;
-  (void)key;
-  (void)in;
-  (void)params;
+  // EM 模式：交换 key 和 input
+  if (is_em) {
+    const uint8_t* tmp = actual_key;
+    actual_key         = actual_in;
+    actual_in          = tmp;
+  }
+  
+  // 步骤 1: 生成轮密钥
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, actual_key);
+
+  // 维护 K[0..35]（用于生成 τ(X) 以写入正确的 inv_norm）
+  uint32_t K[SM4_ROUNDS + 4];
+  for (unsigned int i = 0; i < 4; ++i) {
+    K[i] = sm4_bytes_to_uint32(actual_key + 4 * i) ^ FK[i];
+  }
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    K[round + 4] = rk.round_keys[round];
+  }
+  
+  // 步骤 2: 记录密钥扩展见证（标准模式需要，EM 模式跳过）
+  if (!is_em) {
+    const unsigned int nk = params->lambda / 32; // SM4-128: nk = 4
+    // 记录初始密钥（nk 个字），使用 K[0..3] = MK ^ FK
+    for (unsigned int i = 0; i != nk; ++i) {
+      sm4_uint32_to_bytes(K[i], w);
+      w += 4;
+    }
+    
+    // 记录全部 32 轮密钥 K[4..35]
+    for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+      sm4_uint32_to_bytes(rk.round_keys[round], w);
+      w += 4;
+    }
+
+    // 记录密钥扩展 S-box 逆元（1:3 nibble 方案）:
+    //   round % 4 == 0 → 4 个 invnorm nibble（4-bit），打包为 2 字节
+    //   round % 4 != 0 → 4 个 full-8bit 原始逆元，每个 1 字节
+    for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+      uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
+      uint8_t x_bytes[4];
+      sm4_uint32_to_bytes(x, x_bytes);
+
+      if (round % 4 == 0) {
+        // invnorm 轮：打包 4 个 4-bit nibble 进 2 字节
+        // w[0] = (nibble[1] << 4) | nibble[0]
+        // w[1] = (nibble[3] << 4) | nibble[2]
+        uint8_t n0 = sm4_invnorm(x_bytes[0]);
+        uint8_t n1 = sm4_invnorm(x_bytes[1]);
+        uint8_t n2 = sm4_invnorm(x_bytes[2]);
+        uint8_t n3 = sm4_invnorm(x_bytes[3]);
+        *w++ = (uint8_t)((n1 << 4) | (n0 & 0xF));
+        *w++ = (uint8_t)((n3 << 4) | (n2 & 0xF));
+      } else {
+        // full-8bit 轮：4 字节原始逆元
+        for (unsigned int j = 0; j < 4; j++) {
+          *w++ = sm4_inverse_affine(sm4_sbox(x_bytes[j]));
+        }
+      }
+    }
+  } else {
+    const unsigned int lambda_bytes = params->lambda / 8;
+    
+    // EM 模式：保存 OWF key 到扩展见证
+    memcpy(w, actual_in, lambda_bytes);
+    w += lambda_bytes;
+  }
+  
+#if !defined(NDEBUG)
+  assert(w - w_out == params->Lke / 8);
+#endif
+  
+  // 步骤 3: 记录加密过程中间状态（1:3 nibble 方案）:
+  //   quad q (4轮一组), round = q*4 + r_in_quad (r_in_quad = 0,1,2,3)
+  //   r_in_quad == 0: invnorm 轮，2字节打包 4 个 nibble
+  //   r_in_quad == 1,2,3: full-8bit 轮，4字节原始逆元
+  //   quad_bytes = 14，共 8 个 quad = 112 字节 = 896 bits
+  uint32_t state[4];
+  for (int i = 0; i < 4; i++) {
+    state[i] = sm4_bytes_to_uint32(actual_in + 4 * i);
+  }
+
+  for (unsigned int round = 1; round <= params->R; round++) {
+    uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[round - 1];
+    uint8_t temp_bytes[4];
+    sm4_uint32_to_bytes(temp, temp_bytes);
+
+    const unsigned int r0 = round - 1;  // 0-indexed round
+    if (r0 % 4 == 0) {
+      // invnorm 轮：打包 4 个 nibble 进 2 字节
+      uint8_t n0 = sm4_invnorm(temp_bytes[0]);
+      uint8_t n1 = sm4_invnorm(temp_bytes[1]);
+      uint8_t n2 = sm4_invnorm(temp_bytes[2]);
+      uint8_t n3 = sm4_invnorm(temp_bytes[3]);
+      *w++ = (uint8_t)((n1 << 4) | (n0 & 0xF));
+      *w++ = (uint8_t)((n3 << 4) | (n2 & 0xF));
+    } else {
+      // full-8bit 轮：4字节原始逆元
+      for (int j = 0; j < 4; j++) {
+        *w++ = sm4_inverse_affine(sm4_sbox(temp_bytes[j]));
+      }
+    }
+
+    if (round < params->R) {
+      uint32_t new_word = state[0] ^ sm4_t(temp);
+      state[0] = state[1];
+      state[1] = state[2];
+      state[2] = state[3];
+      state[3] = new_word;
+    }
+  }
+
+  assert(w - w_out == params->l / 8);
 }

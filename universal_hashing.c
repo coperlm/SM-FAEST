@@ -11,7 +11,9 @@
 #include "utils.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
+
 
 static bf64_t compute_h1(const uint8_t* t, const uint8_t* x, unsigned int lambda,
                          unsigned int ell) {

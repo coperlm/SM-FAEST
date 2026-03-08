@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MAX_LAMBDA 128
+#define MAX_LAMBDA 256
 #define MAX_LAMBDA_BYTES (MAX_LAMBDA / 8)
 #define MAX_DEPTH 12
 #define MAX_TAU 32
@@ -22,13 +22,14 @@
 
 FAEST_BEGIN_C_DECL
 
+// 这里需要改为顺序计数
 typedef enum faest_paramid_t {
   PARAMETER_SET_INVALID   = 0,
   FAEST_128S              = 1,
-  FAEST_128F              = 2,
-  FAEST_EM_128S           = 3,
-  FAEST_EM_128F           = 4,
-  PARAMETER_SET_MAX_INDEX = 5
+  FAEST_EM_128S           = 2,
+  FAEST_SM4_128S          = 5,
+  FAEST_EM_SM4_128S       = 6,
+  PARAMETER_SET_MAX_INDEX = 7
 } faest_paramid_t;
 
 typedef struct faest_paramset_t {
@@ -65,6 +66,10 @@ const faest_paramset_t* ATTR_CONST faest_get_paramset(faest_paramid_t paramid);
 static inline bool ATTR_PURE faest_is_em(const faest_paramset_t* params) {
   // EM instances do not have key expansion constraints
   return params->Ske == 0;
+}
+
+static inline bool ATTR_PURE faest_is_sm4(const faest_paramset_t* params) {
+  return params->R == 32;
 }
 
 FAEST_END_C_DECL

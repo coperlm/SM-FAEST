@@ -33,14 +33,18 @@ static inline ATTR_CONST unsigned int bavc_max_node_index(unsigned int i, unsign
   return 1u << ((i < tau_1) ? k : (k - 1));
 }
 
-void bavc_commit(bavc_t* bavc, const uint8_t* root_key, const uint8_t* iv,
+bool bavc_commit(bavc_t* bavc, const uint8_t* root_key, const uint8_t* iv,
                  const faest_paramset_t* params);
 
 bool bavc_open(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
                const faest_paramset_t* params);
+bool bavc_open_sm4(uint8_t* decom_i, const bavc_t* vc, const uint16_t* i_delta,
+                   const faest_paramset_t* params);
 
 bool bavc_reconstruct(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,
                       const uint8_t* iv, const faest_paramset_t* params);
+bool bavc_reconstruct_sm4(bavc_rec_t* bavc_rec, const uint8_t* decom_i, const uint16_t* i_delta,
+                          const uint8_t* iv, const faest_paramset_t* params);
 
 void bavc_clear(bavc_t* com);
 

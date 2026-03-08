@@ -4,6 +4,19 @@
 
 #if defined(HAVE_CONFIG_H)
 #include <config.h>
+// #endif
+
+// // COMPILE-TIME CHECK: ALL AES OPTIMIZATIONS MUST BE DISABLED FOR FAIR COMPARISON WITH SM4
+// #if defined(HAVE_AESNI)
+// #error "AES-NI hardware acceleration is DISABLED for performance comparison. Remove -Daesni=enabled to continue."
+// #endif
+
+// #if defined(HAVE_OPENSSL)
+// #error "OpenSSL AES implementation is DISABLED for fair comparison. Remove -Dopenssl=enabled to continue."
+// #endif
+
+// #if defined(HAVE_AVX2)
+// #error "AVX2 acceleration is DISABLED for fair comparison. Rebuild without AVX2 support."
 #endif
 
 #if defined(_WIN32) && !defined(HAVE_OPENSSL)

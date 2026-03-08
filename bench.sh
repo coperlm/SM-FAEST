@@ -4,21 +4,14 @@ set -euo pipefail
 # set -euxo pipefail
 
 FAEST_128S="faest_128s"
-FAEST_128F="faest_128f"
-FAEST_192S="faest_192s"
-FAEST_192F="faest_192f"
-FAEST_256S="faest_256s"
-FAEST_256F="faest_256f"
+FAEST_SM4_128S="faest_sm4_128s"
 FAEST_EM_128S="faest_em_128s"
-FAEST_EM_128F="faest_em_128f"
-FAEST_EM_192S="faest_em_192s"
-FAEST_EM_192F="faest_em_192f"
-FAEST_EM_256S="faest_em_256s"
-FAEST_EM_256F="faest_em_256f"
+FAEST_EM_SM4_128S="faest_em_sm4_128s"
 
-ALL="FAEST_128S FAEST_128F FAEST_192S FAEST_192F FAEST_256S FAEST_256F FAEST_EM_128S FAEST_EM_128F FAEST_EM_192S FAEST_EM_192F FAEST_EM_256S FAEST_EM_256F"
+ALL="FAEST_128S FAEST_EM_128S FAEST_SM4_128S FAEST_EM_SM4_128S"
 
 BUILD_DIR="build_release"
+SM4_DEBUG_FILTER="${SM4_DEBUG_FILTER:-1}"
 
 clean () {
     ninja -C "${BUILD_DIR}" clean >&2
@@ -36,12 +29,16 @@ run_test () {
     name="$1"
     setting_id="$2"
     echo "# Testing: ${name} (${setting_id})" >&2
-    "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2
+    if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
+        "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2 2> >(grep -v '^\[SM4_DEBUG\]' >&2)
+    else
+        "./${BUILD_DIR}/${setting_id}/${setting_id}_api_test" >&2
+    fi
 }
 
 convert_to_us () {
     input="$1"
-    if ! echo "${input}" | grep -Pq '^\d+(\.\d+)? (u|m|n)?s$'; then
+    if ! echo "${input}" | grep -Pq '^\d+(\.\d+)? (ns|us|ms|s|m)$'; then
         echo "unexpected format: '${input}'" >&2
         exit 1
     fi
@@ -55,6 +52,8 @@ convert_to_us () {
         echo "scale=10; ${num} * 1000"  | bc
     elif [ "$unit" = "s" ]; then
         echo "scale=10; ${num} * 1000 * 1000"  | bc
+    elif [ "$unit" = "m" ]; then
+        echo "scale=10; ${num} * 60 * 1000 * 1000"  | bc
     fi
 }
 
@@ -96,7 +95,7 @@ gather_metadata () {
         --arg "hostname" "${hostname}" \
         --arg "user" "${user}" \
         --arg "timestamp" "${timestamp}" \
-        --arg "git_commit" "${timestamp}" \
+        --arg "git_commit" "${git_commit}" \
         '$ARGS.named' \
         `"
     echo "${json}"
@@ -109,7 +108,11 @@ run_bench () {
 
     meta="`gather_metadata`"
 
-    bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]'`"
+    if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
+        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]' 2> >(grep -v '^\[SM4_DEBUG\]' >&2)`"
+    else
+        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]'`"
+    fi
 
     bench_keygen_out="`echo "${bench_out}" | grep -P '^keygen' -A 2`"
     bench_sign_out="`echo "${bench_out}" | grep -P '^sign' -A 2`"

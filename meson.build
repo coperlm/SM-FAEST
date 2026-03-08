@@ -111,7 +111,9 @@ int main() {
   name: 'compiler supports AVX2',
   args: [avx2_flag],
 )
+
 conf_data.set('HAVE_AVX2', supports_avx2)
+
 
 sse2_flag = cc.get_supported_arguments('-msse2')
 supports_loadu_si64 = cc.links(
@@ -201,30 +203,33 @@ param_128s.set('OWF_INPUT_SIZE', 16)
 param_128s.set('OWF_OUTPUT_SIZE', 16)
 parameter_sets += param_128s
 
-# parameter set: FAEST-128f
-param_128f = configuration_data()
-param_128f.set('PARAM', '128F')
-param_128f.set('PARAM_L', '128f')
-param_128f.set('LAMBDA', 128)
-param_128f.set('Nst', 4)
-param_128f.set('Ske', 40)
-param_128f.set('R', 10)
-param_128f.set('Senc', 160)
-param_128f.set('BETA', 1)
-param_128f.set('ELL', 1280)
-param_128f.set('Lke', 448)
-param_128f.set('Lenc', 832)
-param_128f.set('TAU', 16)
-param_128f.set('W_GRIND', 8)
-param_128f.set('T_OPEN', 110)
-param_128f.set('SIG_SIZE', 5924)
-param_128f.set('PK_SIZE', 32)
-param_128f.set('SK_SIZE', 32)
-param_128f.set('OWF_INPUT_SIZE', 16)
-param_128f.set('OWF_OUTPUT_SIZE', 16)
-parameter_sets += param_128f
+# parameter set: FAEST-SM4-128s
+# ELL = Lke + Lenc = 2048 + 896 = 2944   (1:3 nibble 方案)
+# Lke = 1152(rk array bits) + 896(KE sbox 8 quad×14 bytes) = 2048
+# Lenc = 8 quad×14 bytes×8 bits = 896 (1:3 nibble: invnorm+3×full8)
+param_sm4_128s = configuration_data()
+param_sm4_128s.set('PARAM', 'SM4_128S')
+param_sm4_128s.set('PARAM_L', 'sm4_128s')
+param_sm4_128s.set('LAMBDA', 128)
+param_sm4_128s.set('Nst', 4)
+param_sm4_128s.set('Ske', 128)
+param_sm4_128s.set('R', 32)
+param_sm4_128s.set('Senc', 128)
+param_sm4_128s.set('BETA', 1)
+param_sm4_128s.set('ELL', 2944)
+param_sm4_128s.set('Lke', 2048)
+param_sm4_128s.set('Lenc', 896)
+param_sm4_128s.set('TAU', 11)
+param_sm4_128s.set('W_GRIND', 7)
+param_sm4_128s.set('T_OPEN', 102)
+param_sm4_128s.set('SIG_SIZE', 6794)
+param_sm4_128s.set('PK_SIZE', 32)
+param_sm4_128s.set('SK_SIZE', 32)
+param_sm4_128s.set('OWF_INPUT_SIZE', 16)
+param_sm4_128s.set('OWF_OUTPUT_SIZE', 16)
+parameter_sets += param_sm4_128s
 
-# parameter set: FAEST-EM-128s
+# parameter set: FAEST-EM-128s (AES Even-Mansour, no key schedule)
 param_em_128s = configuration_data()
 param_em_128s.set('PARAM', 'EM_128S')
 param_em_128s.set('PARAM_L', 'em_128s')
@@ -239,36 +244,38 @@ param_em_128s.set('Lke', 128)
 param_em_128s.set('Lenc', 832)
 param_em_128s.set('TAU', 11)
 param_em_128s.set('W_GRIND', 7)
-param_em_128s.set('T_OPEN', 103)
-param_em_128s.set('SIG_SIZE', 3906)
+param_em_128s.set('T_OPEN', 102)
+param_em_128s.set('SIG_SIZE', 3890)
 param_em_128s.set('PK_SIZE', 32)
 param_em_128s.set('SK_SIZE', 32)
 param_em_128s.set('OWF_INPUT_SIZE', 16)
 param_em_128s.set('OWF_OUTPUT_SIZE', 16)
 parameter_sets += param_em_128s
 
-# parameter set: FAEST-EM-128f
-param_em_128f = configuration_data()
-param_em_128f.set('PARAM', 'EM_128F')
-param_em_128f.set('PARAM_L', 'em_128f')
-param_em_128f.set('LAMBDA', 128)
-param_em_128f.set('Nst', 4)
-param_em_128f.set('Ske', 0)
-param_em_128f.set('R', 10)
-param_em_128f.set('Senc', 160)
-param_em_128f.set('BETA', 1)
-param_em_128f.set('ELL', 960)
-param_em_128f.set('Lke', 128)
-param_em_128f.set('Lenc', 832)
-param_em_128f.set('TAU', 16)
-param_em_128f.set('W_GRIND', 8)
-param_em_128f.set('T_OPEN', 112)
-param_em_128f.set('SIG_SIZE', 5060)
-param_em_128f.set('PK_SIZE', 32)
-param_em_128f.set('SK_SIZE', 32)
-param_em_128f.set('OWF_INPUT_SIZE', 16)
-param_em_128f.set('OWF_OUTPUT_SIZE', 16)
-parameter_sets += param_em_128f
+# parameter set: FAEST-EM-SM4-128s (SM4 Even-Mansour, no key schedule)
+# ELL = Lke + Lenc = 128 + 896 = 1024   (1:3 nibble 方案)
+# Lenc = 8 quad×14 bytes×8 bits = 896 (1:3 nibble: invnorm+3×full8)
+param_em_sm4_128s = configuration_data()
+param_em_sm4_128s.set('PARAM', 'EM_SM4_128S')
+param_em_sm4_128s.set('PARAM_L', 'em_sm4_128s')
+param_em_sm4_128s.set('LAMBDA', 128)
+param_em_sm4_128s.set('Nst', 4)
+param_em_sm4_128s.set('Ske', 0)
+param_em_sm4_128s.set('R', 32)
+param_em_sm4_128s.set('Senc', 128)
+param_em_sm4_128s.set('BETA', 1)
+param_em_sm4_128s.set('ELL', 1024)
+param_em_sm4_128s.set('Lke', 128)
+param_em_sm4_128s.set('Lenc', 896)
+param_em_sm4_128s.set('TAU', 11)
+param_em_sm4_128s.set('W_GRIND', 7)
+param_em_sm4_128s.set('T_OPEN', 102)
+param_em_sm4_128s.set('SIG_SIZE', 4286)
+param_em_sm4_128s.set('PK_SIZE', 32)
+param_em_sm4_128s.set('SK_SIZE', 32)
+param_em_sm4_128s.set('OWF_INPUT_SIZE', 16)
+param_em_sm4_128s.set('OWF_OUTPUT_SIZE', 16)
+parameter_sets += param_em_sm4_128s
 
 # also make data from all parameter sets available "globally"
 parameter_data = configuration_data()
@@ -347,10 +354,14 @@ faest_sources = files(
   'bavc.c',
   'compat.c',
   'faest_impl.c',
+  'faest_sm4.c',
   'fields.c',
   'instances.c',
   'owf.c',
+  'owf_sm4.c',
   'random_oracle.c',
+  'sm_random_oracle.c',
+  'sm4.c',
   'universal_hashing.c',
   'utils.c',
   'vole.c',
@@ -381,6 +392,8 @@ if sha3 == 'auto'
   endif
 endif
 include_directories += [include_directories('sha3'), include_directories('sha3/' + sha3)]
+include_directories += [include_directories('GmSSL_Symmetric/include')]
+faest_sources += files('GmSSL_Symmetric/src/sm3.c')
 
 if sha3 == 's390-cpacf'
   defines += '-DWITH_SHAKE_S390_CPACF'
@@ -428,8 +441,10 @@ foreach parameter_set : parameter_sets
     output: 'faest_@0@.h'.format(parameter_set.get('PARAM_L')),
     configuration: parameter_set,
   )
+  # Use SM4-specific template for SM4 parameter sets
+  param_template = parameter_set.get('PARAM').contains('SM4') ? 'faest_param_sm4.c.in' : 'faest_param.c.in'
   faest_sources += configure_file(
-    input: 'faest_param.c.in',
+    input: param_template,
     output: 'faest_@0@.c'.format(parameter_set.get('PARAM_L')),
     configuration: parameter_set,
   )

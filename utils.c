@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
 
 static inline uint16_t num_rec_2(const uint8_t* v) {
   uint16_t r;
@@ -57,4 +58,9 @@ bool decode_all_chall_3(uint16_t* decoded_chall, const uint8_t* chall,
     decoded_chall[i] = num_rec_2(tmp);
   }
   return true;
+}
+
+bool decode_all_chall_3_sm4(uint16_t* decoded_chall, const uint8_t* chall,
+                            const faest_paramset_t* params) {
+  return decode_all_chall_3(decoded_chall, chall, params);
 }

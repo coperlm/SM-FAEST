@@ -28,11 +28,7 @@ int main() {
   for (const auto param_id : all_parameters) {
     switch (param_id) {
     case FAEST_128S:
-    case FAEST_192S:
-    case FAEST_256S:
-    case FAEST_EM_128S:
-    case FAEST_EM_192S:
-    case FAEST_EM_256S:
+    case FAEST_SM4_128S:
       continue;
     default:
       break;
@@ -48,26 +44,6 @@ int main() {
     std::generate(owf_input.begin(), owf_input.end(), [&rd, &distrib] { return distrib(rd); });
 
     switch (param_id) {
-    case FAEST_128F:
-      owf_128(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_192F:
-      owf_192(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_256F:
-      owf_256(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_128F:
-      owf_em_128(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_192F:
-      owf_em_192(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_256F:
-      owf_em_256(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    default:
-      continue;
     }
 
     std::cout << "namespace " << faest_get_param_name(param_id) << "{\n";

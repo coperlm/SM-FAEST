@@ -26,23 +26,8 @@ namespace {
                    const std::array<uint8_t, OutputSize>& expected_owf_output) {
     std::array<uint8_t, OutputSize> owf_output;
     switch (param_id) {
-    case FAEST_128F:
+    case FAEST_128S:
       owf_128(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_192F:
-      owf_192(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_256F:
-      owf_256(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_128F:
-      owf_em_128(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_192F:
-      owf_em_192(owf_key.data(), owf_input.data(), owf_output.data());
-      break;
-    case FAEST_EM_256F:
-      owf_em_256(owf_key.data(), owf_input.data(), owf_output.data());
       break;
     default:
       BOOST_TEST(false);
@@ -53,33 +38,8 @@ namespace {
 } // namespace
 
 BOOST_AUTO_TEST_CASE(tv_owf_128) {
-  test_owf_tv(FAEST_128F, owf_tvs::FAEST_128F::key, owf_tvs::FAEST_128F::input,
-              owf_tvs::FAEST_128F::output);
-}
-
-BOOST_AUTO_TEST_CASE(tv_owf_192) {
-  test_owf_tv(FAEST_192F, owf_tvs::FAEST_192F::key, owf_tvs::FAEST_192F::input,
-              owf_tvs::FAEST_192F::output);
-}
-
-BOOST_AUTO_TEST_CASE(tv_owf_256) {
-  test_owf_tv(FAEST_256F, owf_tvs::FAEST_256F::key, owf_tvs::FAEST_256F::input,
-              owf_tvs::FAEST_256F::output);
-}
-
-BOOST_AUTO_TEST_CASE(tv_owf_em_128) {
-  test_owf_tv(FAEST_EM_128F, owf_tvs::FAEST_EM_128F::key, owf_tvs::FAEST_EM_128F::input,
-              owf_tvs::FAEST_EM_128F::output);
-}
-
-BOOST_AUTO_TEST_CASE(tv_owf_em_192) {
-  test_owf_tv(FAEST_EM_192F, owf_tvs::FAEST_EM_192F::key, owf_tvs::FAEST_EM_192F::input,
-              owf_tvs::FAEST_EM_192F::output);
-}
-
-BOOST_AUTO_TEST_CASE(tv_owf_em_256) {
-  test_owf_tv(FAEST_EM_256F, owf_tvs::FAEST_EM_256F::key, owf_tvs::FAEST_EM_256F::input,
-              owf_tvs::FAEST_EM_256F::output);
+  test_owf_tv(FAEST_128S, owf_tvs::FAEST_128S::key, owf_tvs::FAEST_128S::input,
+              owf_tvs::FAEST_128S::output);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
