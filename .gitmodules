@@ -1,9 +1,12 @@
 [submodule "catch2"]
-	path = catch2
+	path = libs/catch2
 	url = git@github.com:catchorg/Catch2.git
-[submodule "gmsm"]
-	path = gmsm
-	url = git@github.com:emmansun/gmsm.git
-[submodule "gmssl"]
-	path = gmssl
-	url = git@github.com:guanzhi/GmSSL.git
+[submodule "GmSSL_Symmetric"]
+	path = libs/GmSSL_Symmetric
+	url = git@github.com:coperlm/GmSSL-Symmetric.git
+[submodule "paper_construct"]
+	path = libs/paper_construct
+	url = git@github.com:coperlm/SM-FAEST-paper.git
+
+[coper@coperpc FAEST]$ git submodule update --init --recursive -f
+致命错误：在 .gitmodules 中未找到子模组路径 'GmSSL_Symmetric' 的 url
