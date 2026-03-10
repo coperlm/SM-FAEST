@@ -319,6 +319,7 @@ if get_option('benchmarks').enabled() and get_option('catch2').enabled()
     files(
       join_paths(
         meson.project_source_root(),
+        'libs',
         'catch2',
         'extras',
         'catch_amalgamated.cpp',
@@ -327,7 +328,7 @@ if get_option('benchmarks').enabled() and get_option('catch2').enabled()
   )
   catch2 = declare_dependency(
     link_with: libcatch2,
-    include_directories: include_directories(join_paths('catch2', 'extras')),
+    include_directories: include_directories(join_paths('libs', 'catch2', 'extras')),
   )
 endif
 
@@ -392,8 +393,8 @@ if sha3 == 'auto'
   endif
 endif
 include_directories += [include_directories('sha3'), include_directories('sha3/' + sha3)]
-include_directories += [include_directories('GmSSL_Symmetric/include')]
-faest_sources += files('GmSSL_Symmetric/src/sm3.c')
+include_directories += [include_directories('libs/GmSSL_Symmetric/include')]
+faest_sources += files('libs/GmSSL_Symmetric/src/sm3.c')
 
 if sha3 == 's390-cpacf'
   defines += '-DWITH_SHAKE_S390_CPACF'

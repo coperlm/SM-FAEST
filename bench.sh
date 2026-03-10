@@ -152,7 +152,7 @@ bench_spec_variants () {
 
 mkdir -p "${BUILD_DIR}"
 pushd "${BUILD_DIR}"
-meson setup .. --buildtype release -Dbenchmarks=enabled -Dcatch2=enabled -Dmarch-native=enabled >&2
+meson setup .. --wipe --buildtype release -Dbenchmarks=enabled -Dcatch2=enabled -Dmarch-native=enabled >&2
 popd
 
 bench_spec_variants

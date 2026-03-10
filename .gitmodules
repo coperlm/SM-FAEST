@@ -7,3 +7,12 @@
 [submodule "paper_construct"]
 	path = libs/paper_construct
 	url = git@github.com:coperlm/SM-FAEST-paper.git
+[submodule "libs/catch2"]
+	path = libs/catch2
+	url = git@github.com:catchorg/Catch2.git
+[submodule "libs/GmSSL_Symmetric"]
+	path = libs/GmSSL_Symmetric
+	url = git@github.com:coperlm/GmSSL-Symmetric.git
+[submodule "libs/paper_construct"]
+	path = libs/paper_construct
+	url = git@github.com:coperlm/SM-FAEST-paper.git
