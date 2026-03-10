@@ -7,6 +7,3 @@
 [submodule "paper_construct"]
 	path = libs/paper_construct
 	url = git@github.com:coperlm/SM-FAEST-paper.git
-
-[coper@coperpc FAEST]$ git submodule update --init --recursive -f
-致命错误：在 .gitmodules 中未找到子模组路径 'GmSSL_Symmetric' 的 url
