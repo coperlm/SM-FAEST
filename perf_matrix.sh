@@ -2,13 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/." && pwd)"
-SAMPLES=1
+SAMPLES=10
 VARIANTS="faest_128s faest_em_128s faest_sm4_128s faest_em_sm4_128s"
+CLEAN=true
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --samples) SAMPLES="$2"; shift 2 ;;
-    *) echo "用法: $0 [--samples N]" >&2; exit 1 ;;
+    --clean) CLEAN=true; shift ;;
+    *) echo "用法: $0 [--samples N] [--clean]" >&2; exit 1 ;;
   esac
 done
 
@@ -38,6 +40,18 @@ CFG_OPTS[oo]="-Daesni=disabled -Dopenssl=disabled -Dbenchmarks=enabled --buildty
 CFG_LABEL[oo]="NI=OFF / SSL=OFF"
 
 CONFIGS="nn no on oo"
+
+# cleanup if requested (now CFG_DIR entries exist)
+if [ "$CLEAN" = true ]; then
+  echo "删除所有配置目录..."
+  for key in nn no on oo; do
+    dir="${ROOT}/${CFG_DIR[$key]}"
+    if [[ -d "$dir" ]]; then
+      rm -rf "$dir"
+      ok "[$key] removed $dir"
+    fi
+  done
+fi
 
 # ── 步骤 2: 构建所有配置 ─────────────────────────────────────────────
 for key in $CONFIGS; do
