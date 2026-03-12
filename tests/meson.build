@@ -147,6 +147,26 @@ if boost_test.found()
   endforeach
 endif
 
+# Standalone SM4 vs AES PRG throughput benchmark
+bench_prg_compare = executable('bench_prg_compare',
+  files('bench_prg_compare.c'),
+  dependencies: [libfaest_static_dependency],
+  include_directories: include_directories,
+  c_args: defines + c_flags,
+  link_args: linker_flags,
+  override_options: ['b_lto=false'],
+)
+
+# Comprehensive SM3/SM4 vs SHAKE/AES perf-profiling benchmark
+bench_sm3_sm4_perf = executable('bench_sm3_sm4_perf',
+  files('bench_sm3_sm4_perf.c'),
+  dependencies: [libfaest_static_dependency],
+  include_directories: include_directories,
+  c_args: defines + c_flags,
+  link_args: linker_flags,
+  override_options: ['b_lto=false'],
+)
+
 if get_option('tv-generators').enabled()
   executable(
     'generate_bavc_tv',

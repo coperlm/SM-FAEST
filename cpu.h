@@ -33,6 +33,8 @@
 #define CPU_CAP_NEON 0x00000008
 /* CPU supports AES-NI */
 #define CPU_CAP_AESNI 0x00000040
+/* CPU supports PCLMULQDQ */
+#define CPU_CAP_PCLMULQDQ 0x00000080
 
 /**
  * Helper function in case __builtin_cpu_supports is not available.
@@ -73,6 +75,16 @@ bool cpu_supports(unsigned int caps);
 #else
 #define CPU_SUPPORTS_AESNI 0
 #define CPU_SUPPORTS_AESNI_AVX2 0
+#endif
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(BUILTIN_CPU_SUPPORTED)
+#define CPU_SUPPORTS_PCLMUL (CPU_SUPPORTS_SSE2 && __builtin_cpu_supports("pclmul"))
+#else
+#define CPU_SUPPORTS_PCLMUL cpu_supports(CPU_CAP_SSE2 | CPU_CAP_PCLMULQDQ)
+#endif
+#else
+#define CPU_SUPPORTS_PCLMUL 0
 #endif
 
 #if defined(__aarch64__)

@@ -7,6 +7,8 @@
 #endif
 
 #include "sm4.h"
+#include "sm4_ni.h"
+#include "cpu.h"
 #include "fields.h"
 #include "compat.h"
 #include "utils.h"
@@ -160,7 +162,6 @@ static inline void add_to_upper_word(uint8_t* iv, uint32_t tweak) {
 void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
              unsigned int bits, size_t outlen) {
   assert(bits == 128 && "sm4_prg: only 128-bit lambda is supported");
-  /* tweak is added modulo 2^32 to the upper IV word; no overflow check needed */
   
   // 初始化轮密钥
   sm4_round_keys_t rk;
@@ -170,8 +171,16 @@ void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out
   uint8_t internal_iv[SM4_BLOCK_SIZE];
   memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
   add_to_upper_word(internal_iv, tweak);
-  
-  // CTR 模式：生成所需数量的块
+
+#if defined(__x86_64__) || defined(_M_X64)
+  /* T-table + multi-block parallel CTR path */
+  sm4_prg_ttable(rk.round_keys, internal_iv, out, outlen);
+  faest_explicit_bzero(&rk, sizeof(rk));
+  faest_explicit_bzero(internal_iv, sizeof(internal_iv));
+  return;
+#endif
+
+  // CTR 模式：生成所需数量的块（标量后备路径）
   for (size_t idx = 0; idx < outlen / SM4_BLOCK_SIZE; idx++, out += SM4_BLOCK_SIZE) {
     sm4_encrypt_block(&rk, internal_iv, out);
     sm4_increment_iv(internal_iv);
@@ -192,12 +201,42 @@ void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out
 void sm4_prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
                       unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
+
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, key);
+
+  uint8_t internal_iv[SM4_BLOCK_SIZE];
+  memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
+  add_to_upper_word(internal_iv, tweak);
+
+#if defined(__x86_64__) || defined(_M_X64)
+  sm4_prg_2_ttable(rk.round_keys, internal_iv, out);
+  faest_explicit_bzero(&rk, sizeof(rk));
+  return;
+#endif
+
+  faest_explicit_bzero(&rk, sizeof(rk));
   sm4_prg(key, iv, tweak, out, bits, 2 * lambda_bytes);
 }
 
 void sm4_prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
                       unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
+
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, key);
+
+  uint8_t internal_iv[SM4_BLOCK_SIZE];
+  memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
+  add_to_upper_word(internal_iv, tweak);
+
+#if defined(__x86_64__) || defined(_M_X64)
+  sm4_prg_4_ttable(rk.round_keys, internal_iv, out);
+  faest_explicit_bzero(&rk, sizeof(rk));
+  return;
+#endif
+
+  faest_explicit_bzero(&rk, sizeof(rk));
   sm4_prg(key, iv, tweak, out, bits, 4 * lambda_bytes);
 }
 

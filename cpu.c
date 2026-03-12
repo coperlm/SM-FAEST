@@ -56,6 +56,9 @@ static unsigned init_caps(void) {
     if (regs.ecx & (1 << 25)) {
       caps |= CPU_CAP_AESNI;
     }
+    if (regs.ecx & (1 << 1)) {
+      caps |= CPU_CAP_PCLMULQDQ;
+    }
   }
 
   if (max >= 7) {
@@ -83,6 +86,9 @@ static unsigned init_caps(void) {
     }
     if (ecx & (1 << 25)) {
       caps |= CPU_CAP_AESNI;
+    }
+    if (ecx & (1 << 1)) {
+      caps |= CPU_CAP_PCLMULQDQ;
     }
   }
 

@@ -10,6 +10,12 @@
 #include "randomness.h"
 #include "utils.h"
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include <wmmintrin.h>   /* PCLMULQDQ: _mm_clmulepi64_si128 */
+#include <emmintrin.h>   /* SSE2 */
+#include "cpu.h"
+#endif
+
 // GF(2^8) with X^8 + X^4 + X^3 + X^1 + 1
 #define bf8_modulus (UINT8_C((1 << 4) | (1 << 3) | (1 << 1) | 1))
 // GF(2^8) with X^8 + X^7 + X^6 + X^5 + X^4 + X^2 + 1 (SM4)
@@ -279,7 +285,103 @@ static inline uint64_t bf128_bit_to_uint64_mask(bf128_t value, unsigned int bit)
   return -((BF_VALUE(value, byte_idx) >> bit_idx) & 1);
 }
 
+/* ======================================================================
+ * PCLMULQDQ-accelerated GF(2^128) multiplication
+ *
+ * Polynomial: x^128 + x^7 + x^2 + x + 1  (modulus = 0x87)
+ *
+ * Uses 4 carry-less multiplications (Karatsuba) for the 128×128→256 product,
+ * then Montgomery-style shift-reduce for modular reduction.
+ * ====================================================================== */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+
+ATTR_TARGET_PCLMUL
+static bf128_t bf128_mul_clmul(bf128_t lhs, bf128_t rhs) {
+  /* Load operands into __m128i */
+  __m128i a, b;
+  memcpy(&a, &lhs, 16);
+  memcpy(&b, &rhs, 16);
+
+  /* Karatsuba: a = (a1:a0), b = (b1:b0)
+   * c0 = a0 * b0        (lo × lo)
+   * c2 = a1 * b1        (hi × hi)
+   * c1 = (a0^a1)*(b0^b1) ^ c0 ^ c2   (mid) */
+  __m128i c0 = _mm_clmulepi64_si128(a, b, 0x00);
+  __m128i c2 = _mm_clmulepi64_si128(a, b, 0x11);
+  __m128i a_xor = _mm_xor_si128(a, _mm_srli_si128(a, 8));
+  __m128i b_xor = _mm_xor_si128(b, _mm_srli_si128(b, 8));
+  /* Only the lower 64 bits of a_xor and b_xor matter */
+  __m128i c1 = _mm_clmulepi64_si128(a_xor, b_xor, 0x00);
+  c1 = _mm_xor_si128(c1, _mm_xor_si128(c0, c2));
+
+  /* Assemble 256-bit product: (c2_hi : c2_lo^c1_hi : c0_hi^c1_lo : c0_lo) */
+  /* = (d3 : d2 : d1 : d0) in 64-bit words */
+  __m128i lo = _mm_xor_si128(c0, _mm_slli_si128(c1, 8));   /* (d1 : d0) */
+  __m128i hi = _mm_xor_si128(c2, _mm_srli_si128(c1, 8));   /* (d3 : d2) */
+
+  /* Reduce: x^128 ≡ x^7 + x^2 + x + 1 (mod p)
+   * For each 64-bit word d_i in the high part (bits 128..255),
+   * we fold it down:  d_i * x^128 = d_i * (x^7 + x^2 + x + 1). */
+
+  /* Extract 64-bit words from the 256-bit product */
+  uint64_t d0 = (uint64_t)_mm_cvtsi128_si64(lo);
+  uint64_t d1 = (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(lo, 8));
+  uint64_t d2 = (uint64_t)_mm_cvtsi128_si64(hi);
+  uint64_t d3 = (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(hi, 8));
+
+  /* Reduce: x^128 ≡ x^7 + x^2 + x + 1 (mod p)
+   * Fold d3 (bits 192..255) into d2:d1 */
+  d1 ^= (d3 << 7) ^ (d3 << 2) ^ (d3 << 1) ^ d3;
+  d2 ^= (d3 >> 57) ^ (d3 >> 62) ^ (d3 >> 63);
+
+  /* Fold d2 (bits 128..191) into d1:d0 */
+  d0 ^= (d2 << 7) ^ (d2 << 2) ^ (d2 << 1) ^ d2;
+  d1 ^= (d2 >> 57) ^ (d2 >> 62) ^ (d2 >> 63);
+
+  bf128_t result;
+  BF_VALUE(result, 0) = d0;
+  BF_VALUE(result, 1) = d1;
+  return result;
+}
+
+ATTR_TARGET_PCLMUL
+static bf128_t bf128_mul_64_clmul(bf128_t lhs, bf64_t rhs) {
+  /* 128×64 carry-less multiply: only need 2 CLMUL instructions */
+  __m128i a, b;
+  memcpy(&a, &lhs, 16);
+  b = _mm_set_epi64x(0, (long long)rhs);
+
+  __m128i c0 = _mm_clmulepi64_si128(a, b, 0x00);  /* a0 * rhs */
+  __m128i c1 = _mm_clmulepi64_si128(a, b, 0x01);  /* a1 * rhs → 128-bit, shifted by 64 */
+
+  /* Product: bits 0..127 in c0, bits 64..191 in c1 (logically shifted up 64) */
+  __m128i lo = _mm_xor_si128(c0, _mm_slli_si128(c1, 8));
+  /* High part: only bits 128..191 = upper 64 of c1 */
+  uint64_t d2 = (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(c1, 8));
+
+  /* d3 = 0 for 128×64 multiply (max product is 191 bits) */
+
+  uint64_t d0 = (uint64_t)_mm_cvtsi128_si64(lo);
+  uint64_t d1 = (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(lo, 8));
+
+  /* Fold d2 into d1:d0 */
+  d0 ^= (d2 << 7) ^ (d2 << 2) ^ (d2 << 1) ^ d2;
+  d1 ^= (d2 >> 57) ^ (d2 >> 62) ^ (d2 >> 63);
+
+  bf128_t result;
+  BF_VALUE(result, 0) = d0;
+  BF_VALUE(result, 1) = d1;
+  return result;
+}
+
+#endif /* x86 */
+
 bf128_t bf128_mul(bf128_t lhs, bf128_t rhs) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  if (CPU_SUPPORTS_PCLMUL) {
+    return bf128_mul_clmul(lhs, rhs);
+  }
+#endif
   bf128_t result = bf128_and_64(lhs, bf128_bit_to_uint64_mask(rhs, 0));
   for (unsigned int idx = 1; idx != 128; ++idx) {
     const uint64_t mask = bf128_bit_to_uint64_mask(lhs, 128 - 1);
@@ -292,6 +394,11 @@ bf128_t bf128_mul(bf128_t lhs, bf128_t rhs) {
 }
 
 bf128_t bf128_mul_64(bf128_t lhs, bf64_t rhs) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  if (CPU_SUPPORTS_PCLMUL) {
+    return bf128_mul_64_clmul(lhs, rhs);
+  }
+#endif
   bf128_t result = bf128_and_64(lhs, bf64_bit_to_mask(rhs, 0));
   for (unsigned int idx = 1; idx != 64; ++idx) {
     const uint64_t mask = bf128_bit_to_uint64_mask(lhs, 128 - 1);
@@ -843,7 +950,86 @@ ATTR_CONST ATTR_ALWAYS_INLINE static inline uint64_t bf384_bit_to_uint64_mask(bf
 }
 #endif
 
+/* ======================================================================
+ * PCLMULQDQ-accelerated bf384_mul_128: GF(2^384) × GF(2^128) → GF(2^384)
+ *
+ * Polynomial: x^384 + x^12 + x^3 + x^2 + 1
+ *
+ * Schoolbook: 6 words × 2 words = 12 CLMUL instructions for the 512-bit
+ * product, then fold the upper 128 bits back using the reduction polynomial.
+ * ====================================================================== */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+
+ATTR_TARGET_PCLMUL
+static bf384_t bf384_mul_128_clmul(bf384_t lhs, bf128_t rhs) {
+  /* lhs = (l5:l4:l3:l2:l1:l0) in 64-bit words
+   * rhs = (r1:r0)
+   * Product has at most 384+128-1 = 511 bits = 8 × 64-bit words (d7..d0) */
+
+  /* Load rhs halves */
+  __m128i r = _mm_set_epi64x((long long)BF_VALUE(rhs, 1), (long long)BF_VALUE(rhs, 0));
+  __m128i r0 = _mm_set_epi64x(0, (long long)BF_VALUE(rhs, 0));
+  __m128i r1 = _mm_set_epi64x(0, (long long)BF_VALUE(rhs, 1));
+
+  /* Load lhs words into __m128i (one per register, low 64 bits) */
+  __m128i l[6];
+  l[0] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[0], 0));
+  l[1] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[0], 1));
+  l[2] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[1], 0));
+  l[3] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[1], 1));
+  l[4] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[2], 0));
+  l[5] = _mm_set_epi64x(0, (long long)BF_VALUE(lhs.inner[2], 1));
+
+  /* Schoolbook: d[i+j] ^= l[i] * r[j] for i=0..5, j=0..1
+   * Each CLMUL gives a 128-bit result contributing to d[i+j] and d[i+j+1] */
+  uint64_t d[8] = {0};
+
+  for (int i = 0; i < 6; i++) {
+    /* l[i] * r0 → contributes to d[i] and d[i+1] */
+    __m128i p0 = _mm_clmulepi64_si128(l[i], r0, 0x00);
+    d[i]   ^= (uint64_t)_mm_cvtsi128_si64(p0);
+    d[i+1] ^= (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(p0, 8));
+
+    /* l[i] * r1 → contributes to d[i+1] and d[i+2] */
+    __m128i p1 = _mm_clmulepi64_si128(l[i], r1, 0x00);
+    d[i+1] ^= (uint64_t)_mm_cvtsi128_si64(p1);
+    d[i+2] ^= (uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(p1, 8));
+  }
+
+  /* Now d[7..0] holds the 512-bit product.
+   * Reduce: x^384 ≡ x^12 + x^3 + x^2 + 1 (mod p)
+   * Fold d[7] (bits 448..511) and d[6] (bits 384..447): */
+
+  /* d[7] represents bits 448..511; x^448 = x^64 * x^384 = x^64*(x^12+x^3+x^2+1) */
+  uint64_t h7 = d[7];
+  d[1] ^= h7;                           /* x^64 * 1 */
+  d[1] ^= (h7 << 2) ^ (h7 << 3) ^ (h7 << 12);  /* x^64 * (x^2+x^3+x^12) */
+  d[2] ^= (h7 >> 62) ^ (h7 >> 61) ^ (h7 >> 52); /* carry of the above */
+
+  /* d[6] represents bits 384..447; x^384 = x^12+x^3+x^2+1 */
+  uint64_t h6 = d[6];
+  d[0] ^= h6;                           /* 1 */
+  d[0] ^= (h6 << 2) ^ (h6 << 3) ^ (h6 << 12);  /* x^2+x^3+x^12 */
+  d[1] ^= (h6 >> 62) ^ (h6 >> 61) ^ (h6 >> 52); /* carry */
+
+  bf384_t result;
+  BF_VALUE(result.inner[0], 0) = d[0];
+  BF_VALUE(result.inner[0], 1) = d[1];
+  BF_VALUE(result.inner[1], 0) = d[2];
+  BF_VALUE(result.inner[1], 1) = d[3];
+  BF_VALUE(result.inner[2], 0) = d[4];
+  BF_VALUE(result.inner[2], 1) = d[5];
+  return result;
+}
+
+#endif /* x86 */
+
 bf384_t bf384_mul_128(bf384_t lhs, bf128_t rhs) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  if (CPU_SUPPORTS_PCLMUL) {
+    return bf384_mul_128_clmul(lhs, rhs);
+  }
+#endif
 #if defined(HAVE_ATTR_VECTOR_SIZE)
   const bf128_t mod = BF128C(bf384_modulus, 0);
 #endif
