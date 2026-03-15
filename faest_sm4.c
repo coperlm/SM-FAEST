@@ -785,61 +785,54 @@ static void sm4_SSS_expkey_constraints_prover(zk_hash_128_3_ctx* hasher, uint8_t
   const unsigned int SM4_R = 32;
   const unsigned int KEY_BITS = (SM4_R + 4) * 32;  // rk 数组的总 bit 数（144 字节）
 
-  // KE sbox 见证从 KEY_BITS 之后开始，quad 布局 14 字节×8 quad
-  const unsigned int quad_bytes = 14;
-  const unsigned int quad_tags  = 112;  // 14*8
+  // KE sbox 见证从 KEY_BITS 之后开始，pair 布局 6 字节×16 pair
+  // pair 内：even(2B nibble) + odd(4B full8)
+  const unsigned int pair_bytes = 6;
+  const unsigned int pair_tags  = 48;  // 6*8
   const uint8_t*  ke_w   = w     + KEY_BITS / 8;
   const bf128_t*  ke_tag = w_tag + KEY_BITS;
-
-  static const unsigned int quad_byte_offsets[4] = {0, 2, 6, 10};
-  static const unsigned int quad_tag_offsets[4]  = {0, 16, 48, 80};
 
   // ::1 向前传播生成轮密钥及其 tag
   sm4_SSS_keyexp_forward_prover(rk, rk_tag, w, w_tag);
 
-  // ::2 对每个 quad 的 S-box 约束
-  for (unsigned int q = 0; q < SM4_R / 4; q++) {
-    const uint8_t*  q_w   = ke_w   + q * quad_bytes;
-    const bf128_t*  q_tag = ke_tag + q * quad_tags;
+  // ::2 对每轮 S-box 约束（even/odd 交替）
+  for (unsigned int i = 0; i < SM4_R; i++) {
+    const unsigned int pair_idx = i / 2;
+    const bool is_even = ((i & 1u) == 0);
+    const uint8_t* p_w = ke_w + pair_idx * pair_bytes;
+    const bf128_t* p_tag = ke_tag + pair_idx * pair_tags;
 
-    for (unsigned int r_in_quad = 0; r_in_quad < 4; r_in_quad++) {
-      const unsigned int i = q * 4 + r_in_quad;  // 0-indexed round (0..31)
+    uint8_t ck_bytes[4];
+    sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
 
-      uint8_t ck_bytes[4];
-      sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
-
-      uint8_t  x_bytes[4];
-      bf128_t  x_tag[32];
-      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-        x_bytes[byte_i] = rk[(i + 1) * 4 + byte_i] ^ rk[(i + 2) * 4 + byte_i] ^
-                          rk[(i + 3) * 4 + byte_i] ^ ck_bytes[byte_i];
-        for (unsigned int bit = 0; bit < 8; bit++) {
-          unsigned int idx = byte_i * 8 + bit;
-          x_tag[idx] = bf128_add(
-              bf128_add(rk_tag[(i + 1) * 32 + idx], rk_tag[(i + 2) * 32 + idx]),
-              rk_tag[(i + 3) * 32 + idx]);
-          // CK 是公开常数，标签贡献为 0
-        }
+    uint8_t x_bytes[4];
+    bf128_t x_tag[32];
+    for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+      x_bytes[byte_i] = rk[(i + 1) * 4 + byte_i] ^ rk[(i + 2) * 4 + byte_i] ^
+                        rk[(i + 3) * 4 + byte_i] ^ ck_bytes[byte_i];
+      for (unsigned int bit = 0; bit < 8; bit++) {
+        unsigned int idx = byte_i * 8 + bit;
+        x_tag[idx] = bf128_add(
+            bf128_add(rk_tag[(i + 1) * 32 + idx], rk_tag[(i + 2) * 32 + idx]),
+            rk_tag[(i + 3) * 32 + idx]);
       }
+    }
 
-      if (r_in_quad == 0) {
-        // ---- invnorm 轮 ----
-        const uint8_t*  wp = q_w   + quad_byte_offsets[0];
-        const bf128_t*  tp = q_tag + quad_tag_offsets[0];
-        for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-          uint8_t        c_nib = (wp[byte_i / 2] >> (4 * (byte_i % 2))) & 0xF;
-          const bf128_t* c_t   = tp + byte_i * 4;
-          sm4_SSS_invnorm_sbox_prover(hasher, x_bytes[byte_i], x_tag + byte_i * 8, c_nib, c_t);
-        }
-      } else {
-        // ---- full-8bit 轮 ----
-        const uint8_t*  wp = q_w   + quad_byte_offsets[r_in_quad];
-        const bf128_t*  tp = q_tag + quad_tag_offsets[r_in_quad];
-        for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-          uint8_t        y_val = wp[byte_i];
-          const bf128_t* y_t   = tp + byte_i * 8;
-          sm4_SSS_full_sbox_prover(hasher, x_bytes[byte_i], x_tag + byte_i * 8, y_val, y_t);
-        }
+    if (is_even) {
+      const uint8_t* wp = p_w;
+      const bf128_t* tp = p_tag;
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        uint8_t c_nib = (wp[byte_i / 2] >> (4 * (byte_i % 2))) & 0xF;
+        const bf128_t* c_t = tp + byte_i * 4;
+        sm4_SSS_invnorm_sbox_prover(hasher, x_bytes[byte_i], x_tag + byte_i * 8, c_nib, c_t);
+      }
+    } else {
+      const uint8_t* wp = p_w + 2;
+      const bf128_t* tp = p_tag + 16;
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        uint8_t y_val = wp[byte_i];
+        const bf128_t* y_t = tp + byte_i * 8;
+        sm4_SSS_full_sbox_prover(hasher, x_bytes[byte_i], x_tag + byte_i * 8, y_val, y_t);
       }
     }
   }
@@ -853,52 +846,46 @@ static void sm4_SSS_expkey_constraints_verifier(zk_hash_128_ctx* hasher, bf128_t
   const unsigned int SM4_R = 32;
   const unsigned int KEY_BITS = (SM4_R + 4) * 32;
 
-  const unsigned int quad_tags = 112;
-  static const unsigned int quad_tag_offsets[4] = {0, 16, 48, 80};
+  const unsigned int pair_tags = 48;
 
   const bf128_t* ke_key = w_key + KEY_BITS;
 
   sm4_SSS_keyexp_forward_verifier(rk_key, w_key);
 
-  for (unsigned int q = 0; q < SM4_R / 4; q++) {
-    const bf128_t* q_key = ke_key + q * quad_tags;
+  for (unsigned int i = 0; i < SM4_R; i++) {
+    const unsigned int pair_idx = i / 2;
+    const bool is_even = ((i & 1u) == 0);
+    const bf128_t* p_key = ke_key + pair_idx * pair_tags;
 
-    for (unsigned int r_in_quad = 0; r_in_quad < 4; r_in_quad++) {
-      const unsigned int i = q * 4 + r_in_quad;
+    uint8_t ck_bytes[4];
+    sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
 
-      uint8_t ck_bytes[4];
-      sm4_uint32_to_bytes(SM4_CK[i], ck_bytes);
-
-      bf128_t x_key[32];
-      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-        for (unsigned int bit = 0; bit < 8; bit++) {
-          unsigned int idx = byte_i * 8 + bit;
-          x_key[idx] = bf128_add(
-              bf128_add(rk_key[(i + 1) * 32 + idx], rk_key[(i + 2) * 32 + idx]),
-              rk_key[(i + 3) * 32 + idx]);
-          // CK 公开常数：verifier 加 delta * ck_bit
-          if ((ck_bytes[byte_i] >> bit) & 1) {
-            x_key[idx] = bf128_add(x_key[idx], delta);
-          }
+    bf128_t x_key[32];
+    for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+      for (unsigned int bit = 0; bit < 8; bit++) {
+        unsigned int idx = byte_i * 8 + bit;
+        x_key[idx] = bf128_add(
+            bf128_add(rk_key[(i + 1) * 32 + idx], rk_key[(i + 2) * 32 + idx]),
+            rk_key[(i + 3) * 32 + idx]);
+        if ((ck_bytes[byte_i] >> bit) & 1) {
+          x_key[idx] = bf128_add(x_key[idx], delta);
         }
       }
+    }
 
-      if (r_in_quad == 0) {
-        // ---- invnorm 轮 ----
-        const bf128_t* tp = q_key + quad_tag_offsets[0];
-        for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-          const bf128_t* x_eval = x_key + byte_i * 8;
-          const bf128_t* c_eval = tp + byte_i * 4;
-          sm4_SSS_invnorm_sbox_verifier(hasher, x_eval, c_eval, delta);
-        }
-      } else {
-        // ---- full-8bit 轮 ----
-        const bf128_t* tp = q_key + quad_tag_offsets[r_in_quad];
-        for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
-          const bf128_t* x_eval = x_key + byte_i * 8;
-          const bf128_t* y_eval = tp + byte_i * 8;
-          sm4_SSS_full_sbox_verifier(hasher, x_eval, y_eval);
-        }
+    if (is_even) {
+      const bf128_t* tp = p_key;
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        const bf128_t* x_eval = x_key + byte_i * 8;
+        const bf128_t* c_eval = tp + byte_i * 4;
+        sm4_SSS_invnorm_sbox_verifier(hasher, x_eval, c_eval, delta);
+      }
+    } else {
+      const bf128_t* tp = p_key + 16;
+      for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
+        const bf128_t* x_eval = x_key + byte_i * 8;
+        const bf128_t* y_eval = tp + byte_i * 8;
+        sm4_SSS_full_sbox_verifier(hasher, x_eval, y_eval);
       }
     }
   }
@@ -942,23 +929,14 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
   memcpy(state,     owf_in,     Nbytes);
   memcpy(state_tag, owf_in_tag, Nbits * sizeof(bf128_t));
 
-  // quad 布局常量：
-  //   每个 quad 的字节游标偏移
-  //   nibble 轮占 2 字节（16 tag bits）
-  //   full8 轮占 4 字节（32 tag bits）
-  // 字节偏移: [0], [2], [6], [10]
-  // tag 偏移（以 bf128 计）: [0], [16], [48], [80]
-  static const unsigned int quad_byte_offsets[4] = {0, 2, 6, 10};
-  static const unsigned int quad_tag_offsets[4]  = {0, 16, 48, 80};
-  const unsigned int quad_bytes = 14;
-  const unsigned int quad_tags  = 112;  // 14 * 8
+  const unsigned int pair_bytes = 6;
+  const unsigned int pair_tags  = 48;
 
-  for (unsigned int q = 0; q < SM4_R / 4; q++) {
-    const uint8_t*  q_w   = w     + q * quad_bytes;
-    const bf128_t*  q_tag = w_tag + q * quad_tags;
-
-    for (unsigned int r_in_quad = 0; r_in_quad < 4; r_in_quad++) {
-      const unsigned int round = q * 4 + r_in_quad;  // 0-indexed
+  for (unsigned int round = 0; round < SM4_R; round++) {
+      const unsigned int pair_idx = round / 2;
+      const bool is_even = ((round & 1u) == 0);
+      const uint8_t* p_w = w + pair_idx * pair_bytes;
+      const bf128_t* p_tag = w_tag + pair_idx * pair_tags;
 
       // === 计算 S-box 输入 in = state[1] ^ state[2] ^ state[3] ^ rk[round] ===
       uint8_t  in_bytes[4];
@@ -978,10 +956,10 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
       uint8_t  sbox_out_val[4];
       bf128_t  sbox_out_tag_bits[32];
 
-      if (r_in_quad == 0) {
+      if (is_even) {
         // ---- invnorm 轮 (degree-3) ----
-        const uint8_t*  wp   = q_w   + quad_byte_offsets[0];   // [0..1]
-        const bf128_t*  tp   = q_tag + quad_tag_offsets[0];     // [0..15]
+        const uint8_t*  wp   = p_w;
+        const bf128_t*  tp   = p_tag;
 
         for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
           // nibble 读取: w[byte_i/2] 的低4(byte_i偶) 或 高4(byte_i奇) bits
@@ -1049,8 +1027,8 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
         }
       } else {
         // ---- full-8bit 轮 (degree-2) ----
-        const uint8_t*  wp = q_w   + quad_byte_offsets[r_in_quad];   // [2],[6],[10]
-        const bf128_t*  tp = q_tag + quad_tag_offsets[r_in_quad];    // [16],[48],[80]
+        const uint8_t*  wp = p_w + 2;
+        const bf128_t*  tp = p_tag + 16;
 
         for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
           uint8_t        y_val = wp[byte_i];
@@ -1089,7 +1067,6 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
         memmove(state_tag,      state_tag + 32,     96 * sizeof(bf128_t));
         memcpy (state_tag + 96, new_word_tag,       32 * sizeof(bf128_t));
       }
-    }
   }
 
   // ========================================================================
@@ -1143,14 +1120,12 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
   bf128_t state_key[128];
   memcpy(state_key, owf_in_key, Nbits * sizeof(bf128_t));
 
-  static const unsigned int quad_tag_offsets[4] = {0, 16, 48, 80};
-  const unsigned int quad_tags = 112;  // 4*4 + 3*4*8
+  const unsigned int pair_tags = 48;
 
-  for (unsigned int q = 0; q < SM4_R / 4; q++) {
-    const bf128_t* q_key = w_key + q * quad_tags;
-
-    for (unsigned int r_in_quad = 0; r_in_quad < 4; r_in_quad++) {
-      const unsigned int round = q * 4 + r_in_quad;
+  for (unsigned int round = 0; round < SM4_R; round++) {
+      const unsigned int pair_idx = round / 2;
+      const bool is_even = ((round & 1u) == 0);
+      const bf128_t* p_key = w_key + pair_idx * pair_tags;
 
       // === S-box 输入的 eval ===
       bf128_t in_key[32];
@@ -1162,9 +1137,9 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
 
       bf128_t sbox_out_key[32];
 
-      if (r_in_quad == 0) {
+      if (is_even) {
         // ---- invnorm 轮 ----
-        const bf128_t* tp = q_key + quad_tag_offsets[0];
+        const bf128_t* tp = p_key;
         for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
           const bf128_t* x_eval = in_key + byte_i * 8;
           const bf128_t* c_eval = tp + byte_i * 4;  // 4 bits nibble key-share
@@ -1203,7 +1178,7 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
         }
       } else {
         // ---- full-8bit 轮 ----
-        const bf128_t* tp = q_key + quad_tag_offsets[r_in_quad];
+        const bf128_t* tp = p_key + 16;
         for (unsigned int byte_i = 0; byte_i < 4; byte_i++) {
           const bf128_t* x_eval = in_key + byte_i * 8;
           const bf128_t* y_eval = tp + byte_i * 8;
@@ -1227,7 +1202,6 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
         memmove(state_key,      state_key + 32,   96 * sizeof(bf128_t));
         memcpy (state_key + 96, new_word_key,     32 * sizeof(bf128_t));
       }
-    }
   }
 
   // ========================================================================

@@ -7,6 +7,7 @@
 #endif
 
 #include "sm4.h"
+#include "sm4_galois.h"
 #include "fields.h"
 #include "compat.h"
 #include "utils.h"
@@ -216,7 +217,7 @@ static inline uint8_t sm4_inverse_affine(uint8_t sbox_out) {
  * 计算 x^238 = x^(-17) in SM4 GF(2^8)，并提取位 (0,2,4,5) 得到4位值
  * 这是 GF(2^4)/GF(2) 的多项式基坐标表示，对应基 {1, β, β², β³} (β=0x0c)
  */
-uint8_t sm4_invnorm(uint8_t x) {
+uint8_t sm4_invnorm_old(uint8_t x) {
   // 238 = 0b11101110: compute x^238 using square-and-multiply in SM4 GF(2^8)
   uint8_t y = bf8_square_sm4(x);        // x^2
   x         = bf8_square_sm4(y);        // x^4
@@ -234,6 +235,35 @@ uint8_t sm4_invnorm(uint8_t x) {
   // Basis: bit0→coeff of 1, bit1→coeff of β=0x0c, bit2→coeff of β²=0x50, bit3→coeff of β³=0x2a
   return set_bit(get_bit(x, 0), 0) ^ set_bit(get_bit(x, 2), 1) ^
          set_bit(get_bit(x, 4), 2) ^ set_bit(get_bit(x, 5), 3);
+}
+
+static uint8_t sm4_trace_to_bits(uint8_t x) {
+  // 固定 dual 常量，精确对应 legacy bit 选择 (0,2,4,5)
+  static const uint8_t dual_for_legacy_bits[4] = {0xc7, 0x71, 0xa6, 0x94};
+  uint8_t out = 0;
+  for (unsigned int i = 0; i < 4; ++i) {
+    const uint8_t tr = sm4_galois_field_trace(bf8_mul_sm4(x, dual_for_legacy_bits[i]));
+    out |= (uint8_t)(tr << i);
+  }
+  return out;
+}
+
+uint8_t sm4_galois_decompose(unsigned int round_idx, uint8_t a, uint8_t round_key) {
+  (void)round_key;
+
+  if ((round_idx & 1u) == 0) {
+    const uint8_t c = sm4_galois_invnorm_path(a);
+    return sm4_trace_to_bits(c);
+  }
+
+  if (a == 0) {
+    return 0;
+  }
+  return bf8_inv_sm4(a);
+}
+
+uint8_t sm4_invnorm(uint8_t x) {
+  return sm4_trace_to_bits(sm4_galois_invnorm_path(x));
 }
 
 // ============ 扩展见证（ZK 证明用）============
@@ -284,15 +314,15 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       w += 4;
     }
 
-    // 记录密钥扩展 S-box 逆元（1:3 nibble 方案）:
-    //   round % 4 == 0 → 4 个 invnorm nibble（4-bit），打包为 2 字节
-    //   round % 4 != 0 → 4 个 full-8bit 原始逆元，每个 1 字节
+    // 记录密钥扩展 S-box 逆元（even/odd 交替方案）:
+    //   even round → 4 个 invnorm nibble（4-bit），打包为 2 字节
+    //   odd  round → 4 个 full-8bit 原始逆元，每个 1 字节
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
       uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
       uint8_t x_bytes[4];
       sm4_uint32_to_bytes(x, x_bytes);
 
-      if (round % 4 == 0) {
+      if ((round & 1u) == 0) {
         // invnorm 轮：打包 4 个 4-bit nibble 进 2 字节
         // w[0] = (nibble[1] << 4) | nibble[0]
         // w[1] = (nibble[3] << 4) | nibble[2]
@@ -321,11 +351,10 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   assert(w - w_out == params->Lke / 8);
 #endif
   
-  // 步骤 3: 记录加密过程中间状态（1:3 nibble 方案）:
-  //   quad q (4轮一组), round = q*4 + r_in_quad (r_in_quad = 0,1,2,3)
-  //   r_in_quad == 0: invnorm 轮，2字节打包 4 个 nibble
-  //   r_in_quad == 1,2,3: full-8bit 轮，4字节原始逆元
-  //   quad_bytes = 14，共 8 个 quad = 112 字节 = 896 bits
+  // 步骤 3: 记录加密过程中间状态（even/odd 交替方案）:
+  //   even round: invnorm 轮，2字节打包 4 个 nibble
+  //   odd  round: full-8bit 轮，4字节原始逆元
+  //   32 轮总计 = 16*(2+4) = 96 字节 = 768 bits
   uint32_t state[4];
   for (int i = 0; i < 4; i++) {
     state[i] = sm4_bytes_to_uint32(actual_in + 4 * i);
@@ -337,7 +366,7 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
     sm4_uint32_to_bytes(temp, temp_bytes);
 
     const unsigned int r0 = round - 1;  // 0-indexed round
-    if (r0 % 4 == 0) {
+    if ((r0 & 1u) == 0) {
       // invnorm 轮：打包 4 个 nibble 进 2 字节
       uint8_t n0 = sm4_invnorm(temp_bytes[0]);
       uint8_t n1 = sm4_invnorm(temp_bytes[1]);
