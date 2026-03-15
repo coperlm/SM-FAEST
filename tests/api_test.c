@@ -84,11 +84,14 @@ int main(void) {
   }
 
   mlen = smlen;
+  printf("Now verifying msg\n");
   ret  = crypto_sign_open(sm, &mlen, sm, smlen, pk);
   if (ret != 0) {
     printf("Failed to verify (ret = %d)\n", ret);
     free(sm);
     return -1;
+  } else {
+    printf("Successfully verified! HOW?\n");
   }
 
   if (mlen != sizeof(message)) {

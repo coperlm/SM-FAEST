@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/." && pwd)"
-SAMPLES=1
+SAMPLES=20
 VARIANTS="faest_128s faest_em_128s faest_sm4_128s faest_em_sm4_128s"
 
 while [[ $# -gt 0 ]]; do

@@ -255,7 +255,7 @@ static bool sm4_check_embedding_constants_once(void) {
 
   const uint8_t beta = 0x0c;
   uint8_t beta_sq = beta;
-  uint8_t beta_cu = beta;
+  uint8_t beta_cu = bf8_mul_sm4(bf8_square_sm4(beta), beta);
 
   for (unsigned int i = 0; i < 5; ++i) {
     const bf128_t expected_sq = sm4_byte_combine_bits(beta_sq);
@@ -931,6 +931,7 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
                                            const uint8_t* rk, const bf128_t* rk_tag,
                                            const faest_paramset_t* params) {
   (void)params;
+  (void)owf_out;
   const unsigned int SM4_R = 32;
   const unsigned int Nbytes = 16;
   const unsigned int Nbits  = 128;
@@ -1032,40 +1033,13 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
               bf128_mul(C_tag_emb, X16_val_emb),
               bf128_mul(C_val_emb, X16_tag_emb));
 
-          // 步骤 D：对该 D-2 tag 施加仿射前向变换 L，得到 sbox_out_tag（仍为 D-2）
-          // L 是线性，所以 L(tag) = 对 tag 的每个分量做相同的 bit-level 线性变换。
-          // 此处利用已有的 sm4_SSS_affine_forward_prover，将 xinv_tag_emb 视为
-          // 单个 GF(2^128) 元素的包装 tag，通过对各 bit 分量施加 L 逆运算来拼接。
-          // 简化实现：使用 sm4_SSS_affine_forward_prover 的线性部分（tag路径）
-          // 注：D-2 tag 通过线性变换后仍为 D-2，满足约束阶数要求。
+          // 步骤 D：将 x^{-1} 的嵌入 tag 拆成 8 个基础 bit 分量，再统一施加 affine。
+          // 这里仅做基向量映射；L 变换由 sm4_SSS_affine_forward_prover 统一处理，避免重复施加。
           uint8_t xinv_scalar = sm4_inverse_affine_scalar(sm4_sbox(in_bytes[byte_i]));
           bf128_t xinv_tag_bits[8];
-          // 将 xinv_tag_emb 分解到 8 个 bit-tag（近似：使用 alpha 基展开的逆映射）
-          // 由于仿射变换 L 在位级操作，我们对 xinv_tag_emb 做 bit-mask 投影：
           for (unsigned int bit = 0; bit < 8; ++bit) {
-            // tag_bit[i] = inner product of xinv_tag_emb with alpha[i]
-            // 这里用 bf128_mul_bit(xinv_tag_emb, ...) 是不完整的，
-            // 正确做法是利用 sm4_affine_l_masks 对 xinv_tag_emb 做 GF(2^8) 线性逆变换。
-            // 但由于仿射变换是线性的，直接对整体 tag 做标量乘更安全：
-            // bit_tag[i] = 对应输出bit的掩码 × xinv_tag_emb（as GF(2^128) scalar）
-            sm4_init_affine_masks();
-            bf128_t acc = bf128_zero();
-            for (unsigned int in_bit = 0; in_bit < 8; ++in_bit) {
-              if ((sm4_affine_l_masks[bit] >> in_bit) & 1u) {
-                // xinv_tag_emb 是整体 D-2 场元素，按 bit-i 的系数提取
-                // 使用标量投影：tag_emb 在基 alpha[in_bit] 的分量
-                // 近似：用 C_tag * X16_val 的 bit-in_bit 分量 +
-                //        C_val * X16_tag 的 bit-in_bit 分量
-                bf128_t ct_bit = c_t[0]; // GF(4) 部分的 bit-投影较复杂，
-                // 此处采用与 AES 相同的处理策略：
-                // 直接把 xinv_tag_emb 作为单 GF(2^128) tag 的线性组合元素
-                (void)ct_bit;
-                acc = bf128_add(acc,
-                    bf128_mul(sm4_byte_combine_bits((uint8_t)(1u << in_bit)),
-                              xinv_tag_emb));
-              }
-            }
-            xinv_tag_bits[bit] = acc;
+            xinv_tag_bits[bit] = bf128_mul(sm4_byte_combine_bits((uint8_t)(1u << bit)),
+                                           xinv_tag_emb);
           }
           uint8_t  soe_val;
           bf128_t  soe_tag[8];
@@ -1217,20 +1191,11 @@ static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
           // 步骤 C：x^{-1}_eval = C_eval_emb * X16_eval_emb（D-2 乘积）
           bf128_t xinv_eval_emb = bf128_mul(C_eval_emb, X16_eval_emb);
 
-          // 步骤 D：对 xinv_eval_emb 施加仿射变换 L（线性，作用在 GF(2^128) 上）
-          // 每个输出 bit 是 xinv_eval_emb 在 L 矩阵对应行的 GF(2) 投影。
+          // 步骤 D：将 x^{-1} 的嵌入 key-share 拆成 8 个基础 bit 分量，再统一施加 affine。
           bf128_t xinv_eval_bits[8];
           for (unsigned int bit = 0; bit < 8; ++bit) {
-            bf128_t acc = bf128_zero();
-            sm4_init_affine_masks();
-            for (unsigned int in_bit = 0; in_bit < 8; ++in_bit) {
-              if ((sm4_affine_l_masks[bit] >> in_bit) & 1u) {
-                acc = bf128_add(acc,
-                    bf128_mul(sm4_byte_combine_bits((uint8_t)(1u << in_bit)),
-                              xinv_eval_emb));
-              }
-            }
-            xinv_eval_bits[bit] = acc;
+            xinv_eval_bits[bit] = bf128_mul(sm4_byte_combine_bits((uint8_t)(1u << bit)),
+                                            xinv_eval_emb);
           }
           bf128_t soe_key[8];
           sm4_SSS_affine_forward_verifier(soe_key, xinv_eval_bits, delta);
@@ -1618,6 +1583,7 @@ void sm4_128_prover(uint8_t* a0_tilde, uint8_t* a1_tilde, uint8_t* a2_tilde, con
   // Stage check: constraints generation complete
 
   // ::14 最终化哈希
+  printf("VERIFIER FINAL HASH called\n");
   zk_hash_128_3_finalize(a0_tilde, a1_tilde, a2_tilde, &hasher, bf_v_star_0,
                          bf128_add(bf_u_star_0, bf_v_star_1), bf_u_star_1);
 
@@ -1696,6 +1662,7 @@ void sm4_128_verifier(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q, const ui
 
   // ::13-14 最终化哈希
   uint8_t q_tilde[16];  // 128位 = 16字节
+  printf("VERIFIER FINAL HASH 2 called\n");
   zk_hash_128_finalize(q_tilde, &b_ctx, q_star);
 
   // Stage check: challenge and hash finalization complete
