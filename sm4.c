@@ -323,8 +323,9 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       w += 4;
     }
 
-    // 记录密钥扩展 S-box 逆元（1:3 nibble 方案）:
-    //   round % 4 == 0 → 4 个 invnorm nibble（4-bit），打包为 2 字节
+    // 记录密钥扩展 S-box 逆元（显式 squared_state 方案）:
+    //   round % 4 == 0 →
+    //      2 字节 invnorm nibble + 4 字节 x^2 + 4 字节 x^16
     //   round % 4 != 0 → 4 个 full-8bit 原始逆元，每个 1 字节
     for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
       uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK[round];
@@ -341,6 +342,20 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
         uint8_t n3 = sm4_invnorm(x_bytes[3]);
         *w++ = (uint8_t)((n1 << 4) | (n0 & 0xF));
         *w++ = (uint8_t)((n3 << 4) | (n2 & 0xF));
+
+        // 显式 squared_state: x^2（4 bytes）
+        for (unsigned int j = 0; j < 4; ++j) {
+          *w++ = bf8_square_sm4(x_bytes[j]);
+        }
+
+        // 显式 squared_state: x^16（4 bytes）
+        for (unsigned int j = 0; j < 4; ++j) {
+          uint8_t x16 = x_bytes[j];
+          for (unsigned int k = 0; k < 4; ++k) {
+            x16 = bf8_square_sm4(x16);
+          }
+          *w++ = x16;
+        }
       } else {
         // full-8bit 轮：4 字节原始逆元
         for (unsigned int j = 0; j < 4; j++) {
@@ -360,11 +375,11 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
   assert(w - w_out == params->Lke / 8);
 #endif
   
-  // 步骤 3: 记录加密过程中间状态（1:3 nibble 方案）:
+  // 步骤 3: 记录加密过程中间状态（显式 squared_state 方案）:
   //   quad q (4轮一组), round = q*4 + r_in_quad (r_in_quad = 0,1,2,3)
-  //   r_in_quad == 0: invnorm 轮，2字节打包 4 个 nibble
+  //   r_in_quad == 0: invnorm 轮，2字节 nibble + 4字节 x^2 + 4字节 x^16
   //   r_in_quad == 1,2,3: full-8bit 轮，4字节原始逆元
-  //   quad_bytes = 14，共 8 个 quad = 112 字节 = 896 bits
+  //   quad_bytes = 22，共 8 个 quad = 176 字节 = 1408 bits
   uint32_t state[4];
   for (int i = 0; i < 4; i++) {
     state[i] = sm4_bytes_to_uint32(actual_in + 4 * i);
@@ -384,6 +399,20 @@ void sm4_extend_witness(uint8_t* w, const uint8_t* key, const uint8_t* in,
       uint8_t n3 = sm4_invnorm(temp_bytes[3]);
       *w++ = (uint8_t)((n1 << 4) | (n0 & 0xF));
       *w++ = (uint8_t)((n3 << 4) | (n2 & 0xF));
+
+      // 显式 squared_state: x^2（4 bytes）
+      for (unsigned int j = 0; j < 4; ++j) {
+        *w++ = bf8_square_sm4(temp_bytes[j]);
+      }
+
+      // 显式 squared_state: x^16（4 bytes）
+      for (unsigned int j = 0; j < 4; ++j) {
+        uint8_t x16 = temp_bytes[j];
+        for (unsigned int k = 0; k < 4; ++k) {
+          x16 = bf8_square_sm4(x16);
+        }
+        *w++ = x16;
+      }
     } else {
       // full-8bit 轮：4字节原始逆元
       for (int j = 0; j < 4; j++) {

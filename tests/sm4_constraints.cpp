@@ -8,6 +8,8 @@
 
 #include "sm4.h"
 #include "fields.h"
+#include "faest_sm4_128s.h"
+#include "faest_tvs.hpp"
 #include <boost/test/unit_test.hpp>
 #include <cstdio>
 
@@ -150,6 +152,170 @@ BOOST_AUTO_TEST_CASE(test_sm4_sbox_structure) {
   
   // 严格要求全部255个非零元素通过
   BOOST_CHECK_EQUAL(match_count, 255);
+}
+
+BOOST_AUTO_TEST_CASE(test_sm4_squared_state_witness_consistency) {
+  namespace tv = faest_tvs::faest_sm4_128s;
+
+  const faest_paramset_t* params = faest_get_paramset(FAEST_SM4_128S);
+  BOOST_REQUIRE(params != nullptr);
+
+  const uint8_t* owf_input = tv::sk.data();
+  const uint8_t* owf_key = tv::sk.data() + 16;
+
+  std::vector<uint8_t> witness(params->l / 8);
+  sm4_extend_witness(witness.data(), owf_key, owf_input, params);
+
+  // KE 区布局: 36*4 bytes 轮密钥后，8个 quad，每 quad 22 bytes
+  const size_t ke_base = 36u * 4u;
+  const size_t ke_quad_bytes = 22u;
+
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, owf_key);
+
+  uint32_t K[SM4_ROUNDS + 4];
+  static const uint32_t FK_local[4] = {
+      0xa3b1bac6, 0x56aa3350, 0x677d9197, 0xb27022dc
+  };
+  static const uint32_t CK_local[32] = {
+      0x00070e15, 0x1c232a31, 0x383f464d, 0x545b6269,
+      0x70777e85, 0x8c939aa1, 0xa8afb6bd, 0xc4cbd2d9,
+      0xe0e7eef5, 0xfc030a11, 0x181f262d, 0x343b4249,
+      0x50575e65, 0x6c737a81, 0x888f969d, 0xa4abb2b9,
+      0xc0c7ced5, 0xdce3eaf1, 0xf8ff060d, 0x141b2229,
+      0x30373e45, 0x4c535a61, 0x686f767d, 0x848b9299,
+      0xa0a7aeb5, 0xbcc3cad1, 0xd8dfe6ed, 0xf4fb0209,
+      0x10171e25, 0x2c333a41, 0x484f565d, 0x646b7279
+  };
+
+  for (unsigned int i = 0; i < 4; ++i) {
+    K[i] = sm4_bytes_to_uint32(owf_key + 4 * i) ^ FK_local[i];
+  }
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    K[round + 4] = rk.round_keys[round];
+  }
+
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    if (round % 4 != 0) {
+      continue;
+    }
+    const unsigned int q = round / 4;
+    const size_t quad_off = ke_base + q * ke_quad_bytes;
+
+    uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK_local[round];
+    uint8_t xb[4];
+    sm4_uint32_to_bytes(x, xb);
+
+    for (unsigned int j = 0; j < 4; ++j) {
+      uint8_t x2 = bf8_square_sm4(xb[j]);
+      uint8_t x16 = xb[j];
+      for (unsigned int k = 0; k < 4; ++k) {
+        x16 = bf8_square_sm4(x16);
+      }
+      BOOST_CHECK_EQUAL(witness[quad_off + 2 + j], x2);
+      BOOST_CHECK_EQUAL(witness[quad_off + 6 + j], x16);
+    }
+  }
+
+  // ENC 区布局: 从 Lke/8 开始，8个 quad，每 quad 22 bytes
+  const size_t enc_base = params->Lke / 8;
+  uint32_t state[4];
+  for (int i = 0; i < 4; ++i) {
+    state[i] = sm4_bytes_to_uint32(owf_input + 4 * i);
+  }
+
+  for (unsigned int round = 1; round <= params->R; ++round) {
+    const unsigned int r0 = round - 1;
+    if (r0 % 4 == 0) {
+      const unsigned int q = r0 / 4;
+      const size_t quad_off = enc_base + q * ke_quad_bytes;
+      uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[r0];
+      uint8_t tb[4];
+      sm4_uint32_to_bytes(temp, tb);
+
+      for (unsigned int j = 0; j < 4; ++j) {
+        uint8_t x2 = bf8_square_sm4(tb[j]);
+        uint8_t x16 = tb[j];
+        for (unsigned int k = 0; k < 4; ++k) {
+          x16 = bf8_square_sm4(x16);
+        }
+        BOOST_CHECK_EQUAL(witness[quad_off + 2 + j], x2);
+        BOOST_CHECK_EQUAL(witness[quad_off + 6 + j], x16);
+      }
+    }
+
+    if (round < params->R) {
+      uint32_t temp = state[1] ^ state[2] ^ state[3] ^ rk.round_keys[r0];
+      uint32_t new_word = state[0] ^ sm4_linear_l(sm4_tau(temp));
+      state[0] = state[1];
+      state[1] = state[2];
+      state[2] = state[3];
+      state[3] = new_word;
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_sm4_tampered_squared_state_detected) {
+  namespace tv = faest_tvs::faest_sm4_128s;
+
+  const faest_paramset_t* params = faest_get_paramset(FAEST_SM4_128S);
+  BOOST_REQUIRE(params != nullptr);
+
+  const uint8_t* owf_input = tv::sk.data();
+  const uint8_t* owf_key = tv::sk.data() + 16;
+
+  std::vector<uint8_t> witness(params->l / 8);
+  sm4_extend_witness(witness.data(), owf_key, owf_input, params);
+
+  // 篡改 KE 区第一个 invnorm quad 的 x^2 字节
+  witness[36 * 4 + 2] ^= 0x01;
+
+  sm4_round_keys_t rk;
+  sm4_init_round_keys(&rk, owf_key);
+
+  uint32_t K[SM4_ROUNDS + 4];
+  static const uint32_t FK_local[4] = {
+      0xa3b1bac6, 0x56aa3350, 0x677d9197, 0xb27022dc
+  };
+  static const uint32_t CK_local[32] = {
+      0x00070e15, 0x1c232a31, 0x383f464d, 0x545b6269,
+      0x70777e85, 0x8c939aa1, 0xa8afb6bd, 0xc4cbd2d9,
+      0xe0e7eef5, 0xfc030a11, 0x181f262d, 0x343b4249,
+      0x50575e65, 0x6c737a81, 0x888f969d, 0xa4abb2b9,
+      0xc0c7ced5, 0xdce3eaf1, 0xf8ff060d, 0x141b2229,
+      0x30373e45, 0x4c535a61, 0x686f767d, 0x848b9299,
+      0xa0a7aeb5, 0xbcc3cad1, 0xd8dfe6ed, 0xf4fb0209,
+      0x10171e25, 0x2c333a41, 0x484f565d, 0x646b7279
+  };
+  for (unsigned int i = 0; i < 4; ++i) {
+    K[i] = sm4_bytes_to_uint32(owf_key + 4 * i) ^ FK_local[i];
+  }
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    K[round + 4] = rk.round_keys[round];
+  }
+
+  bool detected = false;
+  const size_t ke_base = 36u * 4u;
+  const size_t ke_quad_bytes = 22u;
+  for (unsigned int round = 0; round < SM4_ROUNDS && !detected; ++round) {
+    if (round % 4 != 0) {
+      continue;
+    }
+    const unsigned int q = round / 4;
+    const size_t quad_off = ke_base + q * ke_quad_bytes;
+    uint32_t x = K[round + 1] ^ K[round + 2] ^ K[round + 3] ^ CK_local[round];
+    uint8_t xb[4];
+    sm4_uint32_to_bytes(x, xb);
+    for (unsigned int j = 0; j < 4; ++j) {
+      uint8_t x2 = bf8_square_sm4(xb[j]);
+      if (witness[quad_off + 2 + j] != x2) {
+        detected = true;
+        break;
+      }
+    }
+  }
+
+  BOOST_CHECK(detected);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
