@@ -75,6 +75,7 @@ bool cpu_supports(unsigned int caps);
 #define CPU_SUPPORTS_AESNI_AVX2 0
 #endif
 
+
 #if defined(__aarch64__)
 #define CPU_SUPPORTS_NEON 1
 #elif defined(__arm__)

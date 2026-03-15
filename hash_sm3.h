@@ -31,6 +31,11 @@
 #include "gmssl/sm3.h"
 #include "compat.h"   /* faest_explicit_bzero */
 
+#if defined(__x86_64__)
+#include "sm3_ni.h"
+#include "cpu.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -127,9 +132,38 @@ static inline void sm3_xof_finalize(sm3_xof_ctx_t* ctx) {
 static inline void sm3_xof_squeeze(sm3_xof_ctx_t* ctx,
                                     uint8_t*       out,
                                     size_t         len) {
+  /* Drain any remaining cached bytes first */
+  if (ctx->blk_pos < 32) {
+    size_t avail = 32 - ctx->blk_pos;
+    size_t take  = avail < len ? avail : len;
+    memcpy(out, ctx->blk + ctx->blk_pos, take);
+    ctx->blk_pos = (uint8_t)(ctx->blk_pos + (uint8_t)take);
+    out += take;
+    len -= take;
+  }
+
+#if defined(__x86_64__)
+  /* Bulk: 8-way AVX2 parallel (256 bytes per call) */
+  if (CPU_SUPPORTS_AVX2) {
+    while (len >= 256) {
+      sm3_squeeze_8blocks_avx2(ctx->base, ctx->ctr, out);
+      ctx->ctr += 8;
+      out += 256;
+      len -= 256;
+    }
+  }
+  /* Bulk: 4-way SSE2 parallel (128 bytes per call) */
+  while (len >= 128) {
+    sm3_squeeze_4blocks_sse2(ctx->base, ctx->ctr, out);
+    ctx->ctr += 4;
+    out += 128;
+    len -= 128;
+  }
+#endif
+
+  /* Remainder: scalar, one block at a time */
   while (len > 0) {
     if (ctx->blk_pos >= 32) {
-      /* Expand: compute Block_{ctr} = SM3(base || ctr_be32) */
       SM3_CTX tmp;
       uint8_t ctr_bytes[4];
       sm3_xof_put_be32(ctr_bytes, ctx->ctr++);
@@ -137,11 +171,11 @@ static inline void sm3_xof_squeeze(sm3_xof_ctx_t* ctx,
       sm3_update(&tmp, ctx->base, 32);
       sm3_update(&tmp, ctr_bytes, 4);
       sm3_finish(&tmp, ctx->blk);
-      faest_explicit_bzero(&tmp, sizeof(tmp));   /* wipe ephemeral state */
+      faest_explicit_bzero(&tmp, sizeof(tmp));
       ctx->blk_pos = 0;
     }
-    size_t take = (size_t)(32 - ctx->blk_pos);
-    if (take > len) take = len;
+    size_t avail = (size_t)(32 - ctx->blk_pos);
+    size_t take  = avail < len ? avail : len;
     memcpy(out, ctx->blk + ctx->blk_pos, take);
     ctx->blk_pos = (uint8_t)(ctx->blk_pos + (uint8_t)take);
     out += take;
