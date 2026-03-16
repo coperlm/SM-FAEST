@@ -182,32 +182,3 @@ for v in $VARIANTS; do
   done
   printf "|:%s|:%s:|%s:|%s:|%s:|\n" "$sep1" "$sep2" "$sepk" "$seps" "$sepv"
 done
-
-# ── 步骤 6: 加速比小结 ────────────────────────────────────────────────
-echo ""
-echo "## 加速比（Sign 均值，相对 NI=OFF / SSL=OFF）"
-echo ""
-# 加速比表头
-printf "| %-24s | %12s | %12s | %12s | %12s |\n" \
-  "算法" "NI=ON/SSL=ON" "NI=ON/SSL=OFF" "NI=OFF/SSL=ON" "NI=OFF/SSL=OFF"
-sep1="$(printf '%*s' 24 '' | tr ' ' '-')"
-sepA="$(printf '%*s' 12 '' | tr ' ' '-')"
-printf "|:%s|%s:|%s:|%s:|%s:|\n" "$sep1" "$sepA" "$sepA" "$sepA" "$sepA"
-
-for v in $VARIANTS; do
-  base="${DATA[oo,$v,sign]}"
-  row="| $(printf '%-24s' "$v")"
-  for key in nn no on oo; do
-    val="${DATA[$key,$v,sign]}"
-    if [[ "$val" == "N/A" || "$base" == "N/A" || "$base" -eq 0 ]]; then
-      row+=" | $(printf '%11s' 'N/A')"
-    elif [[ "$key" == "oo" ]]; then
-      row+=" | $(printf '%10s' '1.00x')"
-    else
-      ratio=$(awk "BEGIN{ printf \"%.2f x\", $base/$val }")
-      ratio=$(echo "$ratio" | tr -d '\n' | sed -e 's/^ *//' -e 's/ *$//')
-      row+=" | $(printf '%11s' "$ratio")"
-    fi
-  done
-  echo "$row |"
-done
