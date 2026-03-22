@@ -151,19 +151,20 @@ static void sm4_bs_init_anf_once(void) {
 static inline void sm4_bs_sbox_8x8(const sm4_bs_word_t in_bits[8], sm4_bs_word_t out_bits[8]) {
   sm4_bs_init_anf_once();
 
+  sm4_bs_word_t subset_products[256];
+  subset_products[0] = ~(sm4_bs_word_t)0;
+  for (unsigned int mask = 1; mask < 256; ++mask) {
+    const unsigned int lsb = mask & (unsigned int)(-(int)mask);
+    const unsigned int in_bit = __builtin_ctz(lsb);
+    subset_products[mask] = subset_products[mask ^ lsb] & in_bits[in_bit];
+  }
+
   for (unsigned int out_bit = 0; out_bit < 8; ++out_bit) {
     sm4_bs_word_t acc = 0;
     const uint16_t cnt = sm4_bs_anf_count[out_bit];
     for (unsigned int idx = 0; idx < cnt; ++idx) {
       const uint8_t mono = sm4_bs_anf_monomials[out_bit][idx];
-      sm4_bs_word_t term = ~(sm4_bs_word_t)0;
-      uint8_t bit_mask = mono;
-      while (bit_mask) {
-        const unsigned int in_bit = __builtin_ctz((unsigned int)bit_mask);
-        term &= in_bits[in_bit];
-        bit_mask &= (uint8_t)(bit_mask - 1u);
-      }
-      acc ^= term;
+      acc ^= subset_products[mono];
     }
     out_bits[out_bit] = acc;
   }
