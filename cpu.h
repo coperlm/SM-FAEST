@@ -7,6 +7,17 @@
 
 #include "macros.h"
 
+#if defined(FAEST_DISABLE_SIMD)
+
+/* Force disable all SIMD features for testing or compatibility mode. */
+#define CPU_SUPPORTS_SSE2 0
+#define CPU_SUPPORTS_AVX2 0
+#define CPU_SUPPORTS_NEON 0
+#define CPU_SUPPORTS_AESNI 0
+#define CPU_SUPPORTS_AESNI_AVX2 0
+
+#else
+
 #if !defined(OQS)
 /* Check if support for __builtin_cpu_supports is available and known to be working. As tests have
  * showed, support for it on Mac OS X and MinGW is not reliable. */
@@ -79,10 +90,11 @@ bool cpu_supports(unsigned int caps);
 #if defined(__aarch64__)
 #define CPU_SUPPORTS_NEON 1
 #elif defined(__arm__)
-#define CPU_SUPPRTS_NEON cpu_supports(CPU_CAP_NEON)
+#define CPU_SUPPORTS_NEON cpu_supports(CPU_CAP_NEON)
 #else
 #define CPU_SUPPORTS_NEON 0
 #endif
+
 #else
 /* Use OQS function to determine supported CPU features */
 #include <oqs/common.h>
@@ -112,4 +124,6 @@ bool cpu_supports(unsigned int caps);
 #endif
 #endif
 
-#endif
+#endif /* FAEST_DISABLE_SIMD */
+
+#endif /* CPU_H */

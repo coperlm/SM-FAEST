@@ -11,6 +11,12 @@ option(
   description: 'Use ISA extensions for AES',
 )
 option(
+  'simd',
+  type: 'feature',
+  value: 'enabled',
+  description: 'Enable SIMD optimizations globally (AESNI, AVX2, SSE, NEON)',
+)
+option(
   'SHA3',
   type: 'combo',
   choices: ['auto', 'opt64', 'plain32', 'avx2', 'armv8a-neon', 's390-cpacf'],

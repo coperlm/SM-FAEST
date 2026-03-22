@@ -98,6 +98,19 @@ conf_data.set(
   get_option('aesni').require(supports_aesni, error_message: 'AES ISA support enabled but not available').allowed(),
 )
 
+if not get_option('simd').enabled()
+  # Force-disable SIMD feature flags, pass explicit compiler defines to disable runtime SIMD paths.
+  conf_data.set('HAVE_AESNI', false)
+  conf_data.set('HAVE_AVX2', false)
+  conf_data.set('HAVE_MM_LOADU_SI64', false)
+  defines += '-DFAEST_DISABLE_SIMD'
+  if host_machine.cpu_family() == 'x86_64' or host_machine.cpu_family() == 'x86'
+    c_flags += ['-mno-avx2', '-mno-avx', '-mno-sse4.2', '-mno-sse4.1', '-mno-aes']
+  elif host_machine.cpu_family() == 'aarch64' or host_machine.cpu_family() == 'arm'
+    c_flags += ['-mno-neon']
+  endif
+endif
+
 # check compiler if compiler supports AVX2
 avx2_flag = cc.get_supported_arguments(['-mavx2', '-mbmi2'])
 supports_avx2 = cc.links(

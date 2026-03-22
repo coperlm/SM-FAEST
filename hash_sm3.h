@@ -30,10 +30,10 @@
 
 #include "gmssl/sm3.h"
 #include "compat.h"   /* faest_explicit_bzero */
-
-#if defined(__x86_64__)
-#include "sm3_ni.h"
 #include "cpu.h"
+
+#if defined(__x86_64__) && !defined(FAEST_DISABLE_SIMD)
+#include "sm3_ni.h"
 #endif
 
 #ifdef __cplusplus
@@ -142,7 +142,7 @@ static inline void sm3_xof_squeeze(sm3_xof_ctx_t* ctx,
     len -= take;
   }
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined(FAEST_DISABLE_SIMD)
   /* Bulk: 8-way AVX2 parallel (256 bytes per call) */
   if (CPU_SUPPORTS_AVX2) {
     while (len >= 256) {
