@@ -7,11 +7,7 @@
 #endif
 
 #ifndef FAEST_SM4_ALLOW_TTABLE
-#if defined(__x86_64__) || defined(_M_X64)
-#define FAEST_SM4_ALLOW_TTABLE 1
-#else
 #define FAEST_SM4_ALLOW_TTABLE 0
-#endif
 #endif
 
 #include "sm4.h"
@@ -114,7 +110,8 @@ static inline void sm4_increment_iv(uint8_t* iv);
 
 // ============ 完整 bitsliced SM4（8-way）============
 
-#define SM4_BITSLICE_LANES 8
+#define SM4_BITSLICE_LANES 64
+typedef uint64_t sm4_bs_word_t;
 
 static bool sm4_bs_anf_initialized = false;
 static uint8_t sm4_bs_anf_monomials[8][256];
@@ -151,19 +148,20 @@ static void sm4_bs_init_anf_once(void) {
   sm4_bs_anf_initialized = true;
 }
 
-static inline void sm4_bs_sbox_8x8(const uint8_t in_bits[8], uint8_t out_bits[8]) {
+static inline void sm4_bs_sbox_8x8(const sm4_bs_word_t in_bits[8], sm4_bs_word_t out_bits[8]) {
   sm4_bs_init_anf_once();
 
   for (unsigned int out_bit = 0; out_bit < 8; ++out_bit) {
-    uint8_t acc = 0;
+    sm4_bs_word_t acc = 0;
     const uint16_t cnt = sm4_bs_anf_count[out_bit];
     for (unsigned int idx = 0; idx < cnt; ++idx) {
       const uint8_t mono = sm4_bs_anf_monomials[out_bit][idx];
-      uint8_t term = UINT8_C(0xFF);
-      for (unsigned int in_bit = 0; in_bit < 8; ++in_bit) {
-        if ((mono >> in_bit) & 1u) {
-          term &= in_bits[in_bit];
-        }
+      sm4_bs_word_t term = ~(sm4_bs_word_t)0;
+      uint8_t bit_mask = mono;
+      while (bit_mask) {
+        const unsigned int in_bit = __builtin_ctz((unsigned int)bit_mask);
+        term &= in_bits[in_bit];
+        bit_mask &= (uint8_t)(bit_mask - 1u);
       }
       acc ^= term;
     }
@@ -171,30 +169,30 @@ static inline void sm4_bs_sbox_8x8(const uint8_t in_bits[8], uint8_t out_bits[8]
   }
 }
 
-static inline void sm4_bs_pack_word_slices(const uint32_t words[SM4_BITSLICE_LANES], uint8_t slices[32]) {
+static inline void sm4_bs_pack_word_slices(const uint32_t words[SM4_BITSLICE_LANES], sm4_bs_word_t slices[32]) {
   for (unsigned int bit = 0; bit < 32; ++bit) {
-    uint8_t mask = 0;
+    sm4_bs_word_t mask = 0;
     for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
-      mask |= (uint8_t)(((words[lane] >> bit) & 1u) << lane);
+      mask |= ((sm4_bs_word_t)((words[lane] >> bit) & 1u) << lane);
     }
     slices[bit] = mask;
   }
 }
 
-static inline void sm4_bs_unpack_word_slices(const uint8_t slices[32], uint32_t words[SM4_BITSLICE_LANES]) {
+static inline void sm4_bs_unpack_word_slices(const sm4_bs_word_t slices[32], uint32_t words[SM4_BITSLICE_LANES]) {
   for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
     uint32_t value = 0;
     for (unsigned int bit = 0; bit < 32; ++bit) {
-      value |= (uint32_t)(((slices[bit] >> lane) & 1u) << bit);
+      value |= (uint32_t)(((slices[bit] >> lane) & (sm4_bs_word_t)1u) << bit);
     }
     words[lane] = value;
   }
 }
 
-static inline void sm4_bs_tau_word(const uint8_t in_slices[32], uint8_t out_slices[32]) {
+static inline void sm4_bs_tau_word(const sm4_bs_word_t in_slices[32], sm4_bs_word_t out_slices[32]) {
   for (unsigned int byte_off = 0; byte_off < 32; byte_off += 8) {
-    uint8_t sb_in[8];
-    uint8_t sb_out[8];
+    sm4_bs_word_t sb_in[8];
+    sm4_bs_word_t sb_out[8];
     for (unsigned int i = 0; i < 8; ++i) {
       sb_in[i] = in_slices[byte_off + i];
     }
@@ -205,18 +203,18 @@ static inline void sm4_bs_tau_word(const uint8_t in_slices[32], uint8_t out_slic
   }
 }
 
-static inline void sm4_bs_linear_l_word(const uint8_t in_slices[32], uint8_t out_slices[32]) {
+static inline void sm4_bs_linear_l_word(const sm4_bs_word_t in_slices[32], sm4_bs_word_t out_slices[32]) {
   for (unsigned int bit = 0; bit < 32; ++bit) {
     out_slices[bit] = in_slices[bit] ^ in_slices[(bit - 2) & 31] ^ in_slices[(bit - 10) & 31] ^
                       in_slices[(bit - 18) & 31] ^ in_slices[(bit - 24) & 31];
   }
 }
 
-static inline void sm4_bs_prepare_rk_bits(const sm4_round_keys_t* rk, uint8_t rk_bits[SM4_ROUNDS][32]) {
+static inline void sm4_bs_prepare_rk_bits(const sm4_round_keys_t* rk, sm4_bs_word_t rk_bits[SM4_ROUNDS][32]) {
   for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
     const uint32_t k = rk->round_keys[round];
     for (unsigned int bit = 0; bit < 32; ++bit) {
-      rk_bits[round][bit] = (uint8_t)(0u - ((k >> bit) & 1u));
+      rk_bits[round][bit] = ((k >> bit) & 1u) ? ~(sm4_bs_word_t)0 : 0;
     }
   }
 }
@@ -232,17 +230,17 @@ static void sm4_encrypt_8blocks_bitslice(const sm4_round_keys_t* rk,
     w3[lane] = sm4_bytes_to_uint32(in_blocks[lane] + 12);
   }
 
-  uint8_t x0[32], x1[32], x2[32], x3[32];
+  sm4_bs_word_t x0[32], x1[32], x2[32], x3[32];
   sm4_bs_pack_word_slices(w0, x0);
   sm4_bs_pack_word_slices(w1, x1);
   sm4_bs_pack_word_slices(w2, x2);
   sm4_bs_pack_word_slices(w3, x3);
 
-  uint8_t rk_bits[SM4_ROUNDS][32];
+  sm4_bs_word_t rk_bits[SM4_ROUNDS][32];
   sm4_bs_prepare_rk_bits(rk, rk_bits);
 
   for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
-    uint8_t t_in[32], t_tau[32], t_l[32], x_new[32];
+    sm4_bs_word_t t_in[32], t_tau[32], t_l[32], x_new[32];
     for (unsigned int bit = 0; bit < 32; ++bit) {
       t_in[bit] = x1[bit] ^ x2[bit] ^ x3[bit] ^ rk_bits[round][bit];
     }
