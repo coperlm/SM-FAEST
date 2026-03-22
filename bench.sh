@@ -12,6 +12,12 @@ ALL="FAEST_128S FAEST_EM_128S FAEST_SM4_128S FAEST_EM_SM4_128S"
 
 BUILD_DIR="build_release"
 SM4_DEBUG_FILTER="${SM4_DEBUG_FILTER:-1}"
+BENCH_SAMPLES="${BENCH_SAMPLES:-20}"
+BENCH_RESAMPLES="${BENCH_RESAMPLES:-1}"
+BENCH_TIMEOUT_SECS="${BENCH_TIMEOUT_SECS:-180}"
+SM4_BENCH_SAMPLES="${SM4_BENCH_SAMPLES:-6}"
+SM4_BENCH_TIMEOUT_SECS="${SM4_BENCH_TIMEOUT_SECS:-600}"
+BENCH_RETRY_SAMPLES="${BENCH_RETRY_SAMPLES:-3}"
 
 clean () {
     ninja -C "${BUILD_DIR}" clean >&2
@@ -108,10 +114,65 @@ run_bench () {
 
     meta="`gather_metadata`"
 
-    if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
-        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]' 2> >(grep -v '^\[SM4_DEBUG\]' >&2)`"
+    local bench_samples="${BENCH_SAMPLES}"
+    local bench_resamples="${BENCH_RESAMPLES}"
+    local bench_timeout="${BENCH_TIMEOUT_SECS}"
+
+    if [[ "${setting_id}" == *"sm4"* ]]; then
+        bench_samples="${SM4_BENCH_SAMPLES}"
+        bench_timeout="${SM4_BENCH_TIMEOUT_SECS}"
+    fi
+
+    echo "# Bench params: samples=${bench_samples}, resamples=${bench_resamples}, timeout=${bench_timeout}s" >&2
+
+    bench_cmd=(
+        "./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2"
+        '[bench]'
+        '--benchmark-samples' "${bench_samples}"
+        '--benchmark-resamples' "${bench_resamples}"
+    )
+
+    run_bench_once() {
+        local timeout_secs="$1"
+        if [ "${SM4_DEBUG_FILTER}" = "1" ]; then
+            timeout "${timeout_secs}" "${bench_cmd[@]}" 2> >(grep -v '^\[SM4_DEBUG\]' >&2)
+        else
+            timeout "${timeout_secs}" "${bench_cmd[@]}"
+        fi
+    }
+
+    local bench_retried=0
+
+    set +e
+    bench_out="$(run_bench_once "${bench_timeout}")"
+    bench_status=$?
+    set -e
+
+    if [ "${bench_status}" -eq 124 ]; then
+        bench_retried=1
+        echo "# Warn: bench timeout (${bench_timeout}s), retrying with fewer samples (${BENCH_RETRY_SAMPLES})" >&2
+        bench_cmd=(
+            "./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2"
+            '[bench]'
+            '--benchmark-samples' "${BENCH_RETRY_SAMPLES}"
+            '--benchmark-resamples' '1'
+        )
+
+        set +e
+        bench_out="$(run_bench_once "${bench_timeout}")"
+        bench_status=$?
+        set -e
+    fi
+
+    if [ "${bench_status}" -ne 0 ]; then
+        echo "bench command failed for ${setting_id} with status ${bench_status}" >&2
+        exit "${bench_status}"
+    fi
+
+    if [ "${bench_retried}" -eq 1 ]; then
+        echo "# Bench done (after retry): ${name} (${setting_id})" >&2
     else
-        bench_out="`"./${BUILD_DIR}/${setting_id}/${setting_id}_bench_c2" '[bench]'`"
+        echo "# Bench done: ${name} (${setting_id})" >&2
     fi
 
     bench_keygen_out="`echo "${bench_out}" | grep -P '^keygen' -A 2`"

@@ -6,8 +6,18 @@
 #include <config.h>
 #endif
 
+#ifndef FAEST_SM4_ALLOW_TTABLE
+#if defined(__x86_64__) || defined(_M_X64)
+#define FAEST_SM4_ALLOW_TTABLE 1
+#else
+#define FAEST_SM4_ALLOW_TTABLE 0
+#endif
+#endif
+
 #include "sm4.h"
+#if FAEST_SM4_ALLOW_TTABLE
 #include "sm4_ni.h"
+#endif
 #include "cpu.h"
 #include "fields.h"
 #include "compat.h"
@@ -96,6 +106,209 @@ static inline uint32_t sm4_t_prime(uint32_t x) {
   return sm4_linear_l_prime(sm4_tau(x));
 }
 
+#if defined(FAEST_TESTS)
+void sm4_increment_iv(uint8_t* iv);
+#else
+static inline void sm4_increment_iv(uint8_t* iv);
+#endif
+
+// ============ 完整 bitsliced SM4（8-way）============
+
+#define SM4_BITSLICE_LANES 8
+
+static bool sm4_bs_anf_initialized = false;
+static uint8_t sm4_bs_anf_monomials[8][256];
+static uint16_t sm4_bs_anf_count[8];
+
+static void sm4_bs_init_anf_once(void) {
+  if (sm4_bs_anf_initialized) {
+    return;
+  }
+
+  for (unsigned int out_bit = 0; out_bit < 8; ++out_bit) {
+    uint8_t coeff[256];
+    for (unsigned int x = 0; x < 256; ++x) {
+      coeff[x] = (uint8_t)((SM4_SBOX[x] >> out_bit) & 1u);
+    }
+
+    for (unsigned int bit = 0; bit < 8; ++bit) {
+      for (unsigned int mask = 0; mask < 256; ++mask) {
+        if (mask & (1u << bit)) {
+          coeff[mask] ^= coeff[mask ^ (1u << bit)];
+        }
+      }
+    }
+
+    uint16_t cnt = 0;
+    for (unsigned int mask = 0; mask < 256; ++mask) {
+      if (coeff[mask]) {
+        sm4_bs_anf_monomials[out_bit][cnt++] = (uint8_t)mask;
+      }
+    }
+    sm4_bs_anf_count[out_bit] = cnt;
+  }
+
+  sm4_bs_anf_initialized = true;
+}
+
+static inline void sm4_bs_sbox_8x8(const uint8_t in_bits[8], uint8_t out_bits[8]) {
+  sm4_bs_init_anf_once();
+
+  for (unsigned int out_bit = 0; out_bit < 8; ++out_bit) {
+    uint8_t acc = 0;
+    const uint16_t cnt = sm4_bs_anf_count[out_bit];
+    for (unsigned int idx = 0; idx < cnt; ++idx) {
+      const uint8_t mono = sm4_bs_anf_monomials[out_bit][idx];
+      uint8_t term = UINT8_C(0xFF);
+      for (unsigned int in_bit = 0; in_bit < 8; ++in_bit) {
+        if ((mono >> in_bit) & 1u) {
+          term &= in_bits[in_bit];
+        }
+      }
+      acc ^= term;
+    }
+    out_bits[out_bit] = acc;
+  }
+}
+
+static inline void sm4_bs_pack_word_slices(const uint32_t words[SM4_BITSLICE_LANES], uint8_t slices[32]) {
+  for (unsigned int bit = 0; bit < 32; ++bit) {
+    uint8_t mask = 0;
+    for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+      mask |= (uint8_t)(((words[lane] >> bit) & 1u) << lane);
+    }
+    slices[bit] = mask;
+  }
+}
+
+static inline void sm4_bs_unpack_word_slices(const uint8_t slices[32], uint32_t words[SM4_BITSLICE_LANES]) {
+  for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+    uint32_t value = 0;
+    for (unsigned int bit = 0; bit < 32; ++bit) {
+      value |= (uint32_t)(((slices[bit] >> lane) & 1u) << bit);
+    }
+    words[lane] = value;
+  }
+}
+
+static inline void sm4_bs_tau_word(const uint8_t in_slices[32], uint8_t out_slices[32]) {
+  for (unsigned int byte_off = 0; byte_off < 32; byte_off += 8) {
+    uint8_t sb_in[8];
+    uint8_t sb_out[8];
+    for (unsigned int i = 0; i < 8; ++i) {
+      sb_in[i] = in_slices[byte_off + i];
+    }
+    sm4_bs_sbox_8x8(sb_in, sb_out);
+    for (unsigned int i = 0; i < 8; ++i) {
+      out_slices[byte_off + i] = sb_out[i];
+    }
+  }
+}
+
+static inline void sm4_bs_linear_l_word(const uint8_t in_slices[32], uint8_t out_slices[32]) {
+  for (unsigned int bit = 0; bit < 32; ++bit) {
+    out_slices[bit] = in_slices[bit] ^ in_slices[(bit - 2) & 31] ^ in_slices[(bit - 10) & 31] ^
+                      in_slices[(bit - 18) & 31] ^ in_slices[(bit - 24) & 31];
+  }
+}
+
+static inline void sm4_bs_prepare_rk_bits(const sm4_round_keys_t* rk, uint8_t rk_bits[SM4_ROUNDS][32]) {
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    const uint32_t k = rk->round_keys[round];
+    for (unsigned int bit = 0; bit < 32; ++bit) {
+      rk_bits[round][bit] = (uint8_t)(0u - ((k >> bit) & 1u));
+    }
+  }
+}
+
+static void sm4_encrypt_8blocks_bitslice(const sm4_round_keys_t* rk,
+                                         const uint8_t in_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE],
+                                         uint8_t out_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE]) {
+  uint32_t w0[SM4_BITSLICE_LANES], w1[SM4_BITSLICE_LANES], w2[SM4_BITSLICE_LANES], w3[SM4_BITSLICE_LANES];
+  for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+    w0[lane] = sm4_bytes_to_uint32(in_blocks[lane] + 0);
+    w1[lane] = sm4_bytes_to_uint32(in_blocks[lane] + 4);
+    w2[lane] = sm4_bytes_to_uint32(in_blocks[lane] + 8);
+    w3[lane] = sm4_bytes_to_uint32(in_blocks[lane] + 12);
+  }
+
+  uint8_t x0[32], x1[32], x2[32], x3[32];
+  sm4_bs_pack_word_slices(w0, x0);
+  sm4_bs_pack_word_slices(w1, x1);
+  sm4_bs_pack_word_slices(w2, x2);
+  sm4_bs_pack_word_slices(w3, x3);
+
+  uint8_t rk_bits[SM4_ROUNDS][32];
+  sm4_bs_prepare_rk_bits(rk, rk_bits);
+
+  for (unsigned int round = 0; round < SM4_ROUNDS; ++round) {
+    uint8_t t_in[32], t_tau[32], t_l[32], x_new[32];
+    for (unsigned int bit = 0; bit < 32; ++bit) {
+      t_in[bit] = x1[bit] ^ x2[bit] ^ x3[bit] ^ rk_bits[round][bit];
+    }
+
+    sm4_bs_tau_word(t_in, t_tau);
+    sm4_bs_linear_l_word(t_tau, t_l);
+
+    for (unsigned int bit = 0; bit < 32; ++bit) {
+      x_new[bit] = x0[bit] ^ t_l[bit];
+    }
+
+    memcpy(x0, x1, sizeof(x0));
+    memcpy(x1, x2, sizeof(x1));
+    memcpy(x2, x3, sizeof(x2));
+    memcpy(x3, x_new, sizeof(x3));
+  }
+
+  uint32_t y3[SM4_BITSLICE_LANES], y2[SM4_BITSLICE_LANES], y1[SM4_BITSLICE_LANES], y0[SM4_BITSLICE_LANES];
+  sm4_bs_unpack_word_slices(x3, y3);
+  sm4_bs_unpack_word_slices(x2, y2);
+  sm4_bs_unpack_word_slices(x1, y1);
+  sm4_bs_unpack_word_slices(x0, y0);
+
+  for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+    sm4_uint32_to_bytes(y3[lane], out_blocks[lane] + 0);
+    sm4_uint32_to_bytes(y2[lane], out_blocks[lane] + 4);
+    sm4_uint32_to_bytes(y1[lane], out_blocks[lane] + 8);
+    sm4_uint32_to_bytes(y0[lane], out_blocks[lane] + 12);
+  }
+}
+
+static void sm4_prg_bitsliced(const sm4_round_keys_t* rk, uint8_t* iv, uint8_t* out, size_t outlen) {
+  while (outlen >= (SM4_BITSLICE_LANES * SM4_BLOCK_SIZE)) {
+    uint8_t in_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE];
+    uint8_t out_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE];
+
+    for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+      memcpy(in_blocks[lane], iv, SM4_BLOCK_SIZE);
+      sm4_increment_iv(iv);
+    }
+
+    sm4_encrypt_8blocks_bitslice(rk, (const uint8_t(*)[SM4_BLOCK_SIZE])in_blocks, out_blocks);
+
+    for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+      memcpy(out + lane * SM4_BLOCK_SIZE, out_blocks[lane], SM4_BLOCK_SIZE);
+    }
+
+    out += SM4_BITSLICE_LANES * SM4_BLOCK_SIZE;
+    outlen -= SM4_BITSLICE_LANES * SM4_BLOCK_SIZE;
+  }
+
+  while (outlen >= SM4_BLOCK_SIZE) {
+    sm4_encrypt_block(rk, iv, out);
+    sm4_increment_iv(iv);
+    out += SM4_BLOCK_SIZE;
+    outlen -= SM4_BLOCK_SIZE;
+  }
+
+  if (outlen != 0) {
+    uint8_t last_block[SM4_BLOCK_SIZE];
+    sm4_encrypt_block(rk, iv, last_block);
+    memcpy(out, last_block, outlen);
+    faest_explicit_bzero(last_block, sizeof(last_block));
+  }
+}
+
 // ============ 密钥扩展算法 ============
 void sm4_init_round_keys(sm4_round_keys_t* rk, const uint8_t* key) {
   uint32_t K[36]; // K[0..3] 中间密钥, K[4..35] = rk[0..31]
@@ -162,6 +375,7 @@ static inline void add_to_upper_word(uint8_t* iv, uint32_t tweak) {
 void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out,
              unsigned int bits, size_t outlen) {
   assert(bits == 128 && "sm4_prg: only 128-bit lambda is supported");
+  (void)bits;
   
   // 初始化轮密钥
   sm4_round_keys_t rk;
@@ -173,26 +387,16 @@ void sm4_prg(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uint8_t* out
   add_to_upper_word(internal_iv, tweak);
 
 #if defined(__x86_64__) || defined(_M_X64)
+#if FAEST_SM4_ALLOW_TTABLE
   /* T-table + multi-block parallel CTR path */
   sm4_prg_ttable(rk.round_keys, internal_iv, out, outlen);
   faest_explicit_bzero(&rk, sizeof(rk));
   faest_explicit_bzero(internal_iv, sizeof(internal_iv));
   return;
 #endif
+#endif
 
-  // CTR 模式：生成所需数量的块（标量后备路径）
-  for (size_t idx = 0; idx < outlen / SM4_BLOCK_SIZE; idx++, out += SM4_BLOCK_SIZE) {
-    sm4_encrypt_block(&rk, internal_iv, out);
-    sm4_increment_iv(internal_iv);
-  }
-  
-  // 处理不完整的最后一块
-  if (outlen % SM4_BLOCK_SIZE) {
-    uint8_t last_block[SM4_BLOCK_SIZE];
-    sm4_encrypt_block(&rk, internal_iv, last_block);
-    memcpy(out, last_block, outlen % SM4_BLOCK_SIZE);
-    faest_explicit_bzero(last_block, sizeof(last_block));
-  }
+  sm4_prg_bitsliced(&rk, internal_iv, out, outlen);
 
   faest_explicit_bzero(&rk, sizeof(rk));
   faest_explicit_bzero(internal_iv, sizeof(internal_iv));
@@ -202,20 +406,6 @@ void sm4_prg_2_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uin
                       unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
 
-  sm4_round_keys_t rk;
-  sm4_init_round_keys(&rk, key);
-
-  uint8_t internal_iv[SM4_BLOCK_SIZE];
-  memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
-  add_to_upper_word(internal_iv, tweak);
-
-#if defined(__x86_64__) || defined(_M_X64)
-  sm4_prg_2_ttable(rk.round_keys, internal_iv, out);
-  faest_explicit_bzero(&rk, sizeof(rk));
-  return;
-#endif
-
-  faest_explicit_bzero(&rk, sizeof(rk));
   sm4_prg(key, iv, tweak, out, bits, 2 * lambda_bytes);
 }
 
@@ -223,20 +413,6 @@ void sm4_prg_4_lambda(const uint8_t* key, const uint8_t* iv, uint32_t tweak, uin
                       unsigned int bits) {
   const unsigned int lambda_bytes = bits / 8;
 
-  sm4_round_keys_t rk;
-  sm4_init_round_keys(&rk, key);
-
-  uint8_t internal_iv[SM4_BLOCK_SIZE];
-  memcpy(internal_iv, iv, SM4_BLOCK_SIZE);
-  add_to_upper_word(internal_iv, tweak);
-
-#if defined(__x86_64__) || defined(_M_X64)
-  sm4_prg_4_ttable(rk.round_keys, internal_iv, out);
-  faest_explicit_bzero(&rk, sizeof(rk));
-  return;
-#endif
-
-  faest_explicit_bzero(&rk, sizeof(rk));
   sm4_prg(key, iv, tweak, out, bits, 4 * lambda_bytes);
 }
 
