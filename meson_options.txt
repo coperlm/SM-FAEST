@@ -13,7 +13,7 @@ option(
 option(
   'simd',
   type: 'feature',
-  value: 'enabled',
+  value: 'disabled',
   description: 'Enable SIMD optimizations globally (AESNI, AVX2, SSE, NEON)',
 )
 option(
