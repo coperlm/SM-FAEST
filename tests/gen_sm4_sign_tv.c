@@ -9,11 +9,9 @@
 #include <string.h>
 
 /* 引用 FAEST API */
-#include "faest_sm4_128s/parameters.h"
-#include "faest_em_sm4_128s/parameters.h"
-
-/* 内部接口 — 仅生成 TV 时使用 */
-#include "faest_impl.h"
+#include "parameters.h"
+#include "faest_sm4_128s.h"
+#include "faest_em_sm4_128s.h"
 
 /* SM4-128s 测试向量 key */
 static const uint8_t sm4_sk[FAEST_SM4_128S_SK_SIZE] = {
@@ -62,46 +60,66 @@ static void dump_inc(const char* filename, const uint8_t* data, size_t len) {
 }
 
 int main(int argc, char** argv) {
-    (void)argc; (void)argv;
+    int do_sm4 = 1;
+    int do_em_sm4 = 0;
+
+    if (argc > 1) {
+        do_sm4 = 0;
+        if (strcmp(argv[1], "sm4") == 0) {
+            do_sm4 = 1;
+        } else if (strcmp(argv[1], "em_sm4") == 0) {
+            do_em_sm4 = 1;
+        } else if (strcmp(argv[1], "all") == 0) {
+            do_sm4 = 1;
+            do_em_sm4 = 1;
+        } else {
+            fprintf(stderr, "Usage: %s [sm4|em_sm4|all]\n", argv[0]);
+            return 1;
+        }
+    }
 
     /* SM4-128s */
-    {
-        const faest_paramset_t* params = faest_get_paramset(FAEST_SM4_128S);
-        size_t sig_size = params->sig_size;
+    if (do_sm4) {
+        size_t sig_size = FAEST_SM4_128S_SIG_SIZE;
         uint8_t* sig = calloc(sig_size, 1);
         if (!sig) { perror("calloc"); return 1; }
-        int ret = faest_sign_with_randomness(sig, &sig_size, sm4_sk, sizeof(sm4_sk),
-                                              message, sizeof(message),
-                                              random_seed, sizeof(random_seed),
-                                              params);
+        int ret = faest_sm4_128s_sign_with_randomness(sm4_sk,
+                                  message,
+                                  sizeof(message),
+                                  random_seed,
+                                  sizeof(random_seed),
+                                  sig,
+                                  &sig_size);
         if (ret != 0) {
             fprintf(stderr, "faest_sign SM4-128s failed: %d\n", ret);
             free(sig);
             return 1;
         }
         fprintf(stderr, "SM4-128s signature size: %zu (expected %zu)\n", sig_size,
-                (size_t)FAEST_SM4_128S_SIGNATURE_SIZE);
+            (size_t)FAEST_SM4_128S_SIG_SIZE);
         dump_inc("tests/faest_sm4_128s_signature.inc", sig, sig_size);
         free(sig);
     }
 
     /* EM-SM4-128s */
-    {
-        const faest_paramset_t* params = faest_get_paramset(FAEST_EM_SM4_128S);
-        size_t sig_size = params->sig_size;
+    if (do_em_sm4) {
+        size_t sig_size = FAEST_EM_SM4_128S_SIG_SIZE;
         uint8_t* sig = calloc(sig_size, 1);
         if (!sig) { perror("calloc"); return 1; }
-        int ret = faest_sign_with_randomness(sig, &sig_size, em_sm4_sk, sizeof(em_sm4_sk),
-                                              message, sizeof(message),
-                                              random_seed, sizeof(random_seed),
-                                              params);
+        int ret = faest_em_sm4_128s_sign_with_randomness(em_sm4_sk,
+                                 message,
+                                 sizeof(message),
+                                 random_seed,
+                                 sizeof(random_seed),
+                                 sig,
+                                 &sig_size);
         if (ret != 0) {
             fprintf(stderr, "faest_sign EM-SM4-128s failed: %d\n", ret);
             free(sig);
             return 1;
         }
         fprintf(stderr, "EM-SM4-128s signature size: %zu (expected %zu)\n", sig_size,
-                (size_t)FAEST_EM_SM4_128S_SIGNATURE_SIZE);
+            (size_t)FAEST_EM_SM4_128S_SIG_SIZE);
         dump_inc("tests/faest_em_sm4_128s_signature.inc", sig, sig_size);
         free(sig);
     }

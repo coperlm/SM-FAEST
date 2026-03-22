@@ -213,4 +213,13 @@ if get_option('tv-generators').enabled()
     link_args: linker_flags,
     override_options: ['b_lto=false'],
   )
+  executable(
+    'gen_sm4_sign_tv',
+    files('gen_sm4_sign_tv.c'),
+    dependencies: [libfaest_static_dependency],
+    include_directories: include_directories,
+    c_args: defines + c_flags,
+    link_args: linker_flags,
+    override_options: ['b_lto=false'],
+  )
 endif
