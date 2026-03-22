@@ -16,3 +16,6 @@
 [submodule "libs/paper_construct"]
 	path = libs/paper_construct
 	url = git@github.com:coperlm/SM-FAEST-paper.git
+[submodule "libs/sm4bs"]
+	path = libs/sm4bs
+	url = https://github.com/emmansun/sm4bs

@@ -1,5 +1,6 @@
 build*/
 .vscode/
+.github/
 
 # 工作笔记和临时文档
 my_work/
