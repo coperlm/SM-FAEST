@@ -22,6 +22,10 @@
 #include <assert.h>
 #include <string.h>
 
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#include <immintrin.h>
+#endif
+
 // ============ SM4 S-box (国密标准 GM/T 0002-2012) ============
 static const uint8_t SM4_SBOX[256] = {
     0xd6, 0x90, 0xe9, 0xfe, 0xcc, 0xe1, 0x3d, 0xb7, 0x16, 0xb6, 0x14, 0xc2, 0x28, 0xfb, 0x2c, 0x05,
@@ -111,6 +115,7 @@ static inline void sm4_increment_iv(uint8_t* iv);
 // ============ 完整 bitsliced SM4（8-way）============
 
 #define SM4_BITSLICE_LANES 64
+#define SM4_BITSLICE_MIN_BATCH 16
 typedef uint64_t sm4_bs_word_t;
 
 static inline void sm4_bs_sbox_8x8(const sm4_bs_word_t in_bits[8], sm4_bs_word_t out_bits[8]) {
@@ -271,31 +276,29 @@ static inline void sm4_bs_sbox_8x8(const sm4_bs_word_t in_bits[8], sm4_bs_word_t
   out_bits[7] = t15;
 }
 
+static inline void sm4_bs_transpose32x32_u32_swar(const uint32_t in[32], uint32_t out[32]);
+static inline bool sm4_bs_avx2_available(void);
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
+__attribute__((target("avx2"))) static void sm4_bs_transpose32x32_u32_avx2(const uint32_t in[32],
+                                                                             uint32_t out[32]);
+#endif
+
 static inline void sm4_bs_pack_word_slices(const uint32_t words[SM4_BITSLICE_LANES], sm4_bs_word_t slices[32]) {
 #if SM4_BITSLICE_LANES == 64
-  uint32_t lo[32];
-  uint32_t hi[32];
+  uint32_t lo[32], hi[32], lo_t[32], hi_t[32];
   memcpy(lo, words, 32 * sizeof(uint32_t));
   memcpy(hi, words + 32, 32 * sizeof(uint32_t));
 
-  for (unsigned int j = 16, m = 0x0000FFFFu; j != 0; j >>= 1, m ^= (m << j)) {
-    for (unsigned int k = 0; k < 32; k = (k + j + 1u) & ~j) {
-      const uint32_t t = (lo[k] ^ (lo[k + j] >> j)) & m;
-      lo[k] ^= t;
-      lo[k + j] ^= (t << j);
-    }
-  }
-
-  for (unsigned int j = 16, m = 0x0000FFFFu; j != 0; j >>= 1, m ^= (m << j)) {
-    for (unsigned int k = 0; k < 32; k = (k + j + 1u) & ~j) {
-      const uint32_t t = (hi[k] ^ (hi[k + j] >> j)) & m;
-      hi[k] ^= t;
-      hi[k + j] ^= (t << j);
-    }
+  if (sm4_bs_avx2_available()) {
+    sm4_bs_transpose32x32_u32_avx2(lo, lo_t);
+    sm4_bs_transpose32x32_u32_avx2(hi, hi_t);
+  } else {
+    sm4_bs_transpose32x32_u32_swar(lo, lo_t);
+    sm4_bs_transpose32x32_u32_swar(hi, hi_t);
   }
 
   for (unsigned int bit = 0; bit < 32; ++bit) {
-    slices[bit] = ((sm4_bs_word_t)hi[bit] << 32) | (sm4_bs_word_t)lo[bit];
+    slices[bit] = ((sm4_bs_word_t)hi_t[bit] << 32) | (sm4_bs_word_t)lo_t[bit];
   }
 #else
   for (unsigned int bit = 0; bit < 32; ++bit) {
@@ -310,31 +313,22 @@ static inline void sm4_bs_pack_word_slices(const uint32_t words[SM4_BITSLICE_LAN
 
 static inline void sm4_bs_unpack_word_slices(const sm4_bs_word_t slices[32], uint32_t words[SM4_BITSLICE_LANES]) {
 #if SM4_BITSLICE_LANES == 64
-  uint32_t lo[32];
-  uint32_t hi[32];
+  uint32_t lo[32], hi[32], lo_t[32], hi_t[32];
   for (unsigned int bit = 0; bit < 32; ++bit) {
     lo[bit] = (uint32_t)(slices[bit]);
     hi[bit] = (uint32_t)(slices[bit] >> 32);
   }
 
-  for (unsigned int j = 16, m = 0x0000FFFFu; j != 0; j >>= 1, m ^= (m << j)) {
-    for (unsigned int k = 0; k < 32; k = (k + j + 1u) & ~j) {
-      const uint32_t t = (lo[k] ^ (lo[k + j] >> j)) & m;
-      lo[k] ^= t;
-      lo[k + j] ^= (t << j);
-    }
+  if (sm4_bs_avx2_available()) {
+    sm4_bs_transpose32x32_u32_avx2(lo, lo_t);
+    sm4_bs_transpose32x32_u32_avx2(hi, hi_t);
+  } else {
+    sm4_bs_transpose32x32_u32_swar(lo, lo_t);
+    sm4_bs_transpose32x32_u32_swar(hi, hi_t);
   }
 
-  for (unsigned int j = 16, m = 0x0000FFFFu; j != 0; j >>= 1, m ^= (m << j)) {
-    for (unsigned int k = 0; k < 32; k = (k + j + 1u) & ~j) {
-      const uint32_t t = (hi[k] ^ (hi[k + j] >> j)) & m;
-      hi[k] ^= t;
-      hi[k + j] ^= (t << j);
-    }
-  }
-
-  memcpy(words, lo, 32 * sizeof(uint32_t));
-  memcpy(words + 32, hi, 32 * sizeof(uint32_t));
+  memcpy(words, lo_t, 32 * sizeof(uint32_t));
+  memcpy(words + 32, hi_t, 32 * sizeof(uint32_t));
 #else
   for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
     uint32_t value = 0;
@@ -345,6 +339,77 @@ static inline void sm4_bs_unpack_word_slices(const sm4_bs_word_t slices[32], uin
   }
 #endif
 }
+
+static inline void sm4_bs_transpose32x32_u32_swar(const uint32_t in[32], uint32_t out[32]) {
+  uint32_t x[32];
+  memcpy(x, in, 32 * sizeof(uint32_t));
+  for (unsigned int j = 16, m = 0x0000FFFFu; j != 0; j >>= 1, m ^= (m << j)) {
+    for (unsigned int k = 0; k < 32; k = (k + j + 1u) & ~j) {
+      const uint32_t t = (x[k] ^ (x[k + j] >> j)) & m;
+      x[k] ^= t;
+      x[k + j] ^= (t << j);
+    }
+  }
+  memcpy(out, x, 32 * sizeof(uint32_t));
+}
+
+static inline bool sm4_bs_avx2_available(void) {
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
+  static int cached = -1;
+  if (cached < 0) {
+    cached = __builtin_cpu_supports("avx2") ? 1 : 0;
+  }
+  return cached == 1;
+#else
+  return false;
+#endif
+}
+
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
+__attribute__((target("avx2"))) static void sm4_bs_transpose32x32_u32_avx2(const uint32_t in[32],
+                                                                             uint32_t out[32]) {
+  const __m128i flip = _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+
+  __m128i t1 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[0], (int)in[1], (int)in[2], (int)in[3]), flip);
+  __m128i t2 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[4], (int)in[5], (int)in[6], (int)in[7]), flip);
+  __m128i t3 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[8], (int)in[9], (int)in[10], (int)in[11]), flip);
+  __m128i t4 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[12], (int)in[13], (int)in[14], (int)in[15]), flip);
+  __m128i t5 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[16], (int)in[17], (int)in[18], (int)in[19]), flip);
+  __m128i t6 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[20], (int)in[21], (int)in[22], (int)in[23]), flip);
+  __m128i t7 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[24], (int)in[25], (int)in[26], (int)in[27]), flip);
+  __m128i t8 = _mm_shuffle_epi8(_mm_setr_epi32((int)in[28], (int)in[29], (int)in[30], (int)in[31]), flip);
+
+  __m128i h = _mm_unpackhi_epi32(t1, t2);
+  t1 = _mm_unpacklo_epi32(t1, t2);
+  __m128i l = _mm_unpacklo_epi32(t3, t4);
+  t3 = _mm_unpackhi_epi32(t3, t4);
+  t2 = _mm_unpackhi_epi64(t1, l);
+  t1 = _mm_unpacklo_epi64(t1, l);
+  t4 = _mm_unpackhi_epi64(h, t3);
+  t3 = _mm_unpacklo_epi64(h, t3);
+
+  h = _mm_unpackhi_epi32(t5, t6);
+  t5 = _mm_unpacklo_epi32(t5, t6);
+  l = _mm_unpacklo_epi32(t7, t8);
+  t7 = _mm_unpackhi_epi32(t7, t8);
+  t6 = _mm_unpackhi_epi64(t5, l);
+  t5 = _mm_unpacklo_epi64(t5, l);
+  t8 = _mm_unpackhi_epi64(h, t7);
+  t7 = _mm_unpacklo_epi64(h, t7);
+
+  const __m128i lo_vecs[4] = {t1, t2, t3, t4};
+  const __m128i hi_vecs[4] = {t5, t6, t7, t8};
+
+  for (unsigned int group = 0; group < 4; ++group) {
+    __m256i tmp = _mm256_castsi128_si256(lo_vecs[group]);
+    tmp         = _mm256_inserti128_si256(tmp, hi_vecs[group], 1);
+    for (unsigned int i = 0; i < 8; ++i) {
+      out[group * 8 + (7 - i)] = (uint32_t)_mm256_movemask_epi8(tmp);
+      tmp                      = _mm256_slli_epi64(tmp, 1);
+    }
+  }
+}
+#endif
 
 static inline void sm4_bs_tau_word(const sm4_bs_word_t in_slices[32], sm4_bs_word_t out_slices[32]) {
   for (unsigned int byte_off = 0; byte_off < 32; byte_off += 8) {
@@ -427,23 +492,33 @@ static void sm4_encrypt_8blocks_bitslice(const sm4_round_keys_t* rk,
 }
 
 static void sm4_prg_bitsliced(const sm4_round_keys_t* rk, uint8_t* iv, uint8_t* out, size_t outlen) {
-  while (outlen >= (SM4_BITSLICE_LANES * SM4_BLOCK_SIZE)) {
+  while ((outlen / SM4_BLOCK_SIZE) >= SM4_BITSLICE_MIN_BATCH) {
+    const size_t batch_blocks = (outlen / SM4_BLOCK_SIZE) >= SM4_BITSLICE_LANES
+                                    ? SM4_BITSLICE_LANES
+                                    : (outlen / SM4_BLOCK_SIZE);
     uint8_t in_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE];
     uint8_t out_blocks[SM4_BITSLICE_LANES][SM4_BLOCK_SIZE];
+    uint8_t ctr[SM4_BLOCK_SIZE];
+
+    memcpy(ctr, iv, SM4_BLOCK_SIZE);
 
     for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
-      memcpy(in_blocks[lane], iv, SM4_BLOCK_SIZE);
-      sm4_increment_iv(iv);
+      memcpy(in_blocks[lane], ctr, SM4_BLOCK_SIZE);
+      sm4_increment_iv(ctr);
     }
 
     sm4_encrypt_8blocks_bitslice(rk, (const uint8_t(*)[SM4_BLOCK_SIZE])in_blocks, out_blocks);
 
-    for (unsigned int lane = 0; lane < SM4_BITSLICE_LANES; ++lane) {
+    for (size_t lane = 0; lane < batch_blocks; ++lane) {
       memcpy(out + lane * SM4_BLOCK_SIZE, out_blocks[lane], SM4_BLOCK_SIZE);
     }
 
-    out += SM4_BITSLICE_LANES * SM4_BLOCK_SIZE;
-    outlen -= SM4_BITSLICE_LANES * SM4_BLOCK_SIZE;
+    for (size_t lane = 0; lane < batch_blocks; ++lane) {
+      sm4_increment_iv(iv);
+    }
+
+    out += batch_blocks * SM4_BLOCK_SIZE;
+    outlen -= batch_blocks * SM4_BLOCK_SIZE;
   }
 
   while (outlen >= SM4_BLOCK_SIZE) {
