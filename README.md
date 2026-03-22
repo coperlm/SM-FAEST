@@ -1,245 +1,177 @@
-# FAEST - Reference Implementation of the FAEST Digital Signature Scheme
+# FAEST - 参考实现（C/C++）
 
-## Overview
+FAEST 是一种基于 AES/SM4 的后量子数字签名方案，原始论文提交给 NIST PQC 竞标。此仓库提供完整参考实现、测试套件、性能基准与参数集对比。
 
-FAEST is a post-quantum cryptographic signature scheme based on the AES block cipher, submitted to the NIST Post-Quantum Cryptography standardization process. This repository contains the reference implementation in C/C++, designed for academic research and performance evaluation.
+## 目录
 
-**Key Features:**
-- Multiple parameter sets: FAEST-128s, FAEST-EM-128s, FAEST-SM4-128s, FAEST-EM-SM4-128s
-- Comprehensive test suite with known-answer tests
-- Performance benchmarking tools
-- Fair comparison between AES and SM4 implementations
+- 项目简介
+- 参数集
+- 系统与依赖
+- 构建与安装
+- 测试与基准
+- 代码结构
+- 开发指南
+- 许可证与引用
 
-## Dependencies
+## 项目简介
 
-### System Requirements
-- **Operating System**: Linux, macOS, or Windows (with appropriate build tools)
-- **Compiler**: GCC 7+ or Clang 6+ (C11/C++17 support required)
-- **Python**: Python 3.6+ (for benchmarking scripts)
+FAEST 支持以下参数集：
 
-### Build Dependencies
-- **Meson**: >= 0.57 (build system configuration)
-- **Ninja**: Latest version (build execution)
+- `FAEST-128s`
+- `FAEST-EM-128s`
+- `FAEST-SM4-128s`
+- `FAEST-EM-SM4-128s`
 
-### Test and Benchmark Dependencies
-- **Boost**: >= 1.70 (for program_options and test components)
-- **NTL**: >= 11.0 (Number Theory Library, for cryptographic tests)
-- **Catch2**: >= 3.0 (unit testing framework, included as submodule)
+实现包含：
 
-### Installation on Debian/Ubuntu
+- 签名 (sign)
+- 验证 (verify)
+- 密钥生成 (keygen)
+- 证明确认组件（VOLE、BAVC、OWF、哈希、随机预言机）
+
+## 参数集说明
+
+| 参数集 | 基础块密码 | 安全目标 | 用途 |
+| --- | --- | --- | --- |
+| FAEST-128s | AES | 128-bit | 标准签名方案 |
+| FAEST-EM-128s | AES+EM | 128-bit | 兼容对比实验 |
+| FAEST-SM4-128s | SM4 | 128-bit | 国密 SM4 版本 |
+| FAEST-EM-SM4-128s | SM4+EM | 128-bit | SM4 兼容对比 |
+
+## 系统与依赖
+
+### 支持平台
+
+- Linux
+- macOS
+- Windows（Visual Studio + Ninja/Meson）
+
+### 主要依赖
+
+- C/C++: 编译器需支持 C11/C++17（GCC 7+/Clang 6+）
+- Python 3.6+（基准脚本）
+- Meson >= 0.57
+- Ninja
+- Boost >= 1.70（可选，测试）
+- NTL >= 11.0（可选，测试）
+
+### Debian/Ubuntu 快速安装
+
 ```bash
-# Build tools
 sudo apt update
-sudo apt install meson ninja-build gcc g++
-
-# Test dependencies
-sudo apt install libboost-dev libboost-program-options-dev libntl-dev
-
-# Python for scripts
-sudo apt install python3
+sudo apt install -y meson ninja-build gcc g++ python3 libboost-dev libboost-program-options-dev libntl-dev
 ```
 
-### Installation on macOS
+### macOS（Homebrew）
+
 ```bash
-# Using Homebrew
 brew install meson ninja boost ntl python3
-
-# Or using MacPorts
-sudo port install meson ninja boost ntl python3
 ```
 
-### Installation on Windows
-- Install Visual Studio 2019+ with C++ support
-- Install Python 3.6+
-- Use `pip` to install Meson and Ninja: `pip install meson ninja`
+### Windows
 
-## Installation and Setup
+- Visual Studio 2019+（含 C++）
+- Python 3.6+
+- `pip install meson ninja`
 
-### 1. Clone the Repository
+## 构建与安装
+
+### 1. 克隆仓库
+
 ```bash
 git clone https://github.com/your-repo/faest.git
 cd faest
 ```
 
-### 2. Configure Build System
-```bash
-meson setup build_release
-```
-This creates a `build_release/` directory with build configuration. Meson will automatically detect available compilers and features.
+### 2. 配置构建目录
 
-### 3. Build the Project
+```bash
+meson setup build_release --buildtype=release
+```
+
+### 3. 编译
+
 ```bash
 cd build_release
 ninja
 ```
-This compiles all variants and test executables.
 
-### 4. (Optional) Install Python Dependencies
+### 4. 安装（可选）
+
 ```bash
-pip install -r requirements.txt
+ninja install
 ```
-(Note: Currently no external Python packages required)
 
-## Running Tests
+## 测试与基准
 
-### One-Command Test Execution
-To run all tests and verify correctness:
+### 运行全部测试
+
 ```bash
 cd build_release
 meson test
 ```
 
-### Individual Component Tests
+### 详细测试输出
+
 ```bash
-# API tests for all parameter sets
+meson test -v
+```
+
+### 手动执行参数集测试
+
+```bash
 ./faest_128s/faest_128s_api_test
 ./faest_em_128s/faest_em_128s_api_test
 ./faest_sm4_128s/faest_sm4_128s_api_test
 ./faest_em_sm4_128s/faest_em_sm4_128s_api_test
-
-# Unit tests (if Catch2 enabled)
-meson test -v
 ```
 
-### Performance Benchmarks
+### 基准运行
+
 ```bash
-# Quick benchmark (Python script)
-python3 quick_bench.py
-
-# Detailed benchmarks
-./faest_128s/faest_128s_bench_c2
-./faest_sm4_128s/faest_sm4_128s_bench_c2
-
-# Batch benchmark script
 bash bench.sh
 ```
 
-## Interpreting Experimental Results
+或直接运行生成的基准程序：
 
-### Test Output Interpretation
-- **API Tests**: Pass/fail status indicates correct implementation of sign/verify operations
-- **Unit Tests**: Detailed assertions on internal components (VOLE, BAVC, etc.)
-- **Known-Answer Tests**: Compare against precomputed test vectors for validation
-
-### Performance Data Format
-Benchmark outputs are in JSON format with the following fields:
-- `variant`: Parameter set name (e.g., "FAEST_128S")
-- `total_time_us`: Mean execution time in microseconds
-- `min_ms`/`max_ms`: Min/max observed times in milliseconds
-- `iterations`: Number of measurement iterations
-- `sig_size_bytes`: Signature size in bytes
-- `pk_size_bytes`: Public key size in bytes
-- `sk_size_bytes`: Secret key size in bytes
-
-Example output:
-```json
-{
-  "variant": "FAEST_128S",
-  "total_time_us": 15420.5,
-  "min_ms": 14.8,
-  "max_ms": 16.2,
-  "iterations": 10,
-  "sig_size_bytes": 4506,
-  "pk_size_bytes": 32,
-  "sk_size_bytes": 32
-}
+```bash
+./faest_128s/faest_128s_bench_c2
+./faest_sm4_128s/faest_sm4_128s_bench_c2
 ```
 
-### Analyzing Results
-- **Correctness**: All tests must pass (return code 0)
-- **Performance**: Compare `total_time_us` across variants for relative performance
-- **Reproducibility**: Results should be consistent across runs (±5% variance expected)
-- **Fair Comparison**: AES and SM4 variants are built with identical optimizations disabled for equitable comparison
-
-## Project Structure
-```
-faest/
-├── meson.build              # Build configuration
-├── README.md               # This file
-├── requirements.txt        # Python dependencies
-├── aes.c/aes.h            # AES implementation
-├── sm4.c/sm4.h            # SM4 implementation
-├── faest_impl.c           # Core signature logic
-├── tests/                 # Test vectors and unit tests
-├── tools/                 # Benchmarking tools
-├── sha3/                  # Keccak/SHA-3 implementation
-└── build_release/         # Generated build directory
-```
-
-## Reproducibility Notes
-- All random operations use cryptographically secure PRNGs
-- Test vectors are deterministic and version-controlled
-- Performance measurements include statistical analysis (mean, min, max)
-- Hardware-specific optimizations are disabled by default for fair comparison
-
-## License
-This project is licensed under the MIT License. See LICENSE for details.
-
-## Citation
-If you use this implementation in academic work, please cite:
+## 代码结构
 
 ```
-@misc{faest-ref,
-  title={FAEST: Reference Implementation},
-  author={FAEST Development Team},
-  year={2024},
-  url={https://github.com/your-repo/faest}
-}
+/                  根目录
+├── aes.c/.h       AES 实现
+├── sm4.c/.h       SM4 实现
+├── faest_impl.c   核心签名实现
+├── faest_param*.c 有参数集配置
+├── instances.c    参数集注册
+├── tests/         测试集和向量
+├── tools/         基准与辅助脚本
+├── meson.build    构建定义
+├── build_release/ Meson 输出目录
+└── LICENSE        MIT 许可证
 ```
 
-For the FAEST specification:
-```
-@inproceedings{faest-spec,
-  title={FAEST: Tightly Secure Multi-Signature Schemes from the AES Block Cipher},
-  author={Baum, Carsten and others},
-  booktitle={Advances in Cryptology -- EUROCRYPT 2023},
-  year={2023}
-}
-```
+## 开发指南
 
-### 2. 编译
+- 修改后：`cd build_release && ninja` 进行快速增量编译
+- 重新配置：`meson setup --reconfigure build_release`
+- 清理：`cd build_release && ninja clean`
+- 新增参数集：复制 `faest_*` 目录模板，更新 `instances.*` 与 `meson.build`
 
-```sh
-cd build
-ninja
-```
+## 输出说明
 
-`ninja` 会编译所有源文件并生成：
-- `libfaest.so` — 共享库
-- `libfaest.a` / `libfaest_no_random.a` — 静态库
-- 各参数集的测试程序（如 `faest_128s_api_test` 等）
+- `libfaest.so`, `libfaest.a`, `libfaest_no_random.a`
+- 各参数集测试/基准可执行文件
+- 测试结果码：0 表示成功
 
-### 3. 运行测试
+## 许可证
 
-```sh
-meson test            # 运行所有测试
-meson test -v         # 运行所有测试并显示详细输出
-```
+本项目采用 MIT 许可证，详见 `LICENSE`。
 
-### 4. 常用操作
+## 引用
 
-```sh
-# 重新编译（修改代码后）
-cd build && ninja
-
-# 重新配置（修改 meson.build 后）
-meson setup --reconfigure build
-
-# 清理构建
-cd build && ninja clean
-
-# Release 模式编译（开启优化）
-meson setup build --buildtype=release
-cd build && ninja
-```
-
-```
-# 方法一：Python 采集 + 表格
-python3 collect_bench.py benchmark_results.jsonl && python3 bench_table.py
-
-# 方法二：bash bench.sh 管道（原始 bench.sh 流）
-bash bench.sh 2>/dev/null | tee benchmark_results.jsonl | python3 bench_table.py
-
-# 方法三：比较多个历史记录
-python3 bench_table.py run_old.jsonl benchmark_results.jsonl
-```
+https://github.com/faest-sign/faest-ref
