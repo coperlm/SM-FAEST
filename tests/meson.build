@@ -9,6 +9,7 @@ if boost_test.found()
     'extended_tests.cpp',
     'fields.cpp',
     'hash_shake.cpp',
+    'hash_sm3.cpp',
     'instances.cpp',
     'owf.cpp',
     'owf_sm4.cpp',
@@ -61,6 +62,12 @@ if boost_test.found()
     'SHAKE',
     extended_tests,
     args: ['-t', 'hash_shake'],
+    timeout: 6000,
+  )
+  test(
+    'SM3',
+    extended_tests,
+    args: ['-t', 'hash_sm3'],
     timeout: 6000,
   )
   test(

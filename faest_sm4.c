@@ -548,7 +548,12 @@ static void sm4_SSS_invnorm_sbox_prover(zk_hash_128_3_ctx* hasher,
   // 注意：c2 实际上是"Δ^0 系数"，即 val×val×val + val_S
   // 这里按 faest_aes.c.in 的 convention：update(hasher, deg3_coeff, deg2_coeff, deg1_coeff)
   // deg0 （常数项）对应正确见证时为0，不显式传递
-  (void)(bf128_add(bf128_mul(bf128_mul(C_val, X2_val), X16_val), X_val)); // 调试时可断言=0
+  const bf128_t constant_term =
+      bf128_add(bf128_mul(bf128_mul(C_val, X2_val), X16_val), X_val);
+  assert(BF_VALUE(constant_term, 0) == 0 && BF_VALUE(constant_term, 1) == 0);
+#if defined(NDEBUG)
+  (void)constant_term;
+#endif
 
   zk_hash_128_3_update(hasher, d0, d1, d2);
 }
@@ -1246,12 +1251,14 @@ static void sm4_SSS_enc_constraints_prover(zk_hash_128_3_ctx* hasher,
  * SM4 加密约束 (Verifier版本) — 1:3 nibble 方案
  *
  * w_key 见证 key-share 布局（与 prover 完全对称）：
- *   8 个 quad，每 quad quad_tags=112 个 bf128_t
+ *   8 个 quad，每 quad quad_tags=176 个 bf128_t
  *   quad 内：
  *     [0..15]   = nibble 轮 4 sbox × 4 bits（每 sbox 4 个 bf128_t）
- *     [16..47]  = full8 轮1 4 sbox × 8 bits
- *     [48..79]  = full8 轮2
- *     [80..111] = full8 轮3
+ *     [16..47]  = nibble 轮 x² 见证（4 sbox × 8 bits）
+ *     [48..79]  = nibble 轮 x¹⁶ 见证（4 sbox × 8 bits）
+ *     [80..111] = full8 轮1 4 sbox × 8 bits
+ *     [112..143] = full8 轮2 4 sbox × 8 bits
+ *     [144..175] = full8 轮3 4 sbox × 8 bits
  */
 static void sm4_SSS_enc_constraints_verifier(zk_hash_128_ctx* hasher,
                                              const bf128_t* owf_in_key,
