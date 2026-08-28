@@ -438,9 +438,9 @@ static inline void sm4_verify(uint8_t* a0_tilde, const uint8_t* d, uint8_t** Q,
 }
 
 // FAEST.Sign()
-void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t* owf_key,
-                const uint8_t* owf_input, const uint8_t* owf_output, const uint8_t* witness,
-                const uint8_t* rho, size_t rholen, const faest_paramset_t* params) {
+int faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t* owf_key,
+               const uint8_t* owf_input, const uint8_t* owf_output, const uint8_t* witness,
+               const uint8_t* rho, size_t rholen, const faest_paramset_t* params) {
   const unsigned int ell           = params->l;
   const unsigned int ell_bytes     = ell / 8;
   const unsigned int lambda        = params->lambda;
@@ -469,7 +469,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     faest_explicit_bzero(rootkey, sizeof(rootkey));
     faest_explicit_bzero(mu, sizeof(mu));
     faest_explicit_bzero(iv, sizeof(iv));
-    return;
+    return -1;
   }
   // v has \hat \ell rows, \lambda columns, storing in column-major order
   uint8_t** V = malloc(lambda * sizeof(uint8_t*));
@@ -480,7 +480,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     faest_explicit_bzero(rootkey, sizeof(rootkey));
     faest_explicit_bzero(mu, sizeof(mu));
     faest_explicit_bzero(iv, sizeof(iv));
-    return;
+    return -1;
   }
   V[0] = calloc(lambda, ell_hat_bytes);
   if (!V[0]) {
@@ -491,7 +491,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     faest_explicit_bzero(rootkey, sizeof(rootkey));
     faest_explicit_bzero(mu, sizeof(mu));
     faest_explicit_bzero(iv, sizeof(iv));
-    return;
+    return -1;
   }
   for (unsigned int i = 1; i < lambda; ++i) {
     V[i] = V[0] + i * ell_hat_bytes;
@@ -504,7 +504,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     faest_explicit_bzero(rootkey, sizeof(rootkey));
     faest_explicit_bzero(mu, sizeof(mu));
     faest_explicit_bzero(iv, sizeof(iv));
-    return;
+    return -1;
   }
   bavc_initialized = true;
 
@@ -583,7 +583,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
     faest_explicit_bzero(rootkey, sizeof(rootkey));
     faest_explicit_bzero(mu, sizeof(mu));
     faest_explicit_bzero(iv, sizeof(iv));
-    return;
+    return -1;
   }
   
   for (; true; ++ctr) {
@@ -640,6 +640,7 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msg_len, const uint8_t*
   faest_explicit_bzero(rootkey, sizeof(rootkey));
   faest_explicit_bzero(mu, sizeof(mu));
   faest_explicit_bzero(iv, sizeof(iv));
+  return 0;
 }
 
 int faest_verify(const uint8_t* msg, size_t msglen, const uint8_t* sig, const uint8_t* owf_input,

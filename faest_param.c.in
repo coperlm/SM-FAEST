@@ -37,11 +37,19 @@ int FAEST_CALLING_CONVENTION faest_@PARAM_L@_keygen(uint8_t* pk, uint8_t* sk) {
 
   bool done = false;
   while (!done) {
-    rand_bytes(SK_KEY(sk), @LAMBDA@  / 8);
+    if (rand_bytes(SK_KEY(sk), @LAMBDA@  / 8) != 0) {
+      faest_explicit_bzero(pk, @PK_SIZE@);
+      faest_explicit_bzero(sk, @SK_SIZE@);
+      return -1;
+    }
     done = (ptr_get_bit(SK_KEY(sk), 0) & ptr_get_bit(SK_KEY(sk), 1)) == 0;
     faest_declassify(&done, sizeof(done));
   }
-  rand_bytes(SK_INPUT(sk), @OWF_INPUT_SIZE@);
+  if (rand_bytes(SK_INPUT(sk), @OWF_INPUT_SIZE@) != 0) {
+    faest_explicit_bzero(pk, @PK_SIZE@);
+    faest_explicit_bzero(sk, @SK_SIZE@);
+    return -1;
+  }
   // declassify OWF input
   faest_declassify(SK_INPUT(sk), @OWF_INPUT_SIZE@);
   faest_@PARAM_L@_owf(SK_KEY(sk), SK_INPUT(sk), PK_OUTPUT(pk));
@@ -109,9 +117,14 @@ int FAEST_CALLING_CONVENTION faest_@PARAM_L@_sign(const uint8_t* sk, const uint8
   }
 
   uint8_t rho[FAEST_@PARAM@_LAMBDA / 8];
-  rand_bytes(rho, sizeof(rho));
+  if (rand_bytes(rho, sizeof(rho)) != 0) {
+    faest_explicit_bzero(rho, sizeof(rho));
+    return -1;
+  }
 
-  return faest_@PARAM_L@_sign_with_randomness(sk, message, message_len, rho, sizeof(rho), signature, signature_len);
+  int ret = faest_@PARAM_L@_sign_with_randomness(sk, message, message_len, rho, sizeof(rho), signature, signature_len);
+  faest_explicit_bzero(rho, sizeof(rho));
+  return ret;
 }
 
 int FAEST_CALLING_CONVENTION faest_@PARAM_L@_unpacked_sign(const faest_@PARAM_L@_unpacked_private_key_t* sk, const uint8_t* message, size_t message_len, uint8_t* signature, size_t* signature_len) {
@@ -120,9 +133,14 @@ int FAEST_CALLING_CONVENTION faest_@PARAM_L@_unpacked_sign(const faest_@PARAM_L@
   }
 
   uint8_t rho[FAEST_@PARAM@_LAMBDA / 8];
-  rand_bytes(rho, sizeof(rho));
+  if (rand_bytes(rho, sizeof(rho)) != 0) {
+    faest_explicit_bzero(rho, sizeof(rho));
+    return -1;
+  }
 
-  return faest_@PARAM_L@_unpacked_sign_with_randomness(sk, message, message_len, rho, sizeof(rho), signature, signature_len);
+  int ret = faest_@PARAM_L@_unpacked_sign_with_randomness(sk, message, message_len, rho, sizeof(rho), signature, signature_len);
+  faest_explicit_bzero(rho, sizeof(rho));
+  return ret;
 }
 
 int FAEST_CALLING_CONVENTION faest_@PARAM_L@_unpacked_sign_with_randomness(const faest_@PARAM_L@_unpacked_private_key_t* sk, const uint8_t* message, size_t message_len, const uint8_t* rho, size_t rho_len, uint8_t* signature, size_t* signature_len) {
@@ -131,7 +149,11 @@ int FAEST_CALLING_CONVENTION faest_@PARAM_L@_unpacked_sign_with_randomness(const
   }
 
   const faest_paramset_t* params = faest_get_paramset(FAEST_@PARAM@);
-  faest_sign(signature, message, message_len, sk->owf_key, sk->owf_input, sk->owf_output, sk->witness, rho, rho_len, params);
+  int ret = faest_sign(signature, message, message_len, sk->owf_key, sk->owf_input, sk->owf_output,
+                       sk->witness, rho, rho_len, params);
+  if (ret != 0) {
+    return ret;
+  }
   *signature_len = FAEST_@PARAM@_SIGNATURE_SIZE;
 
   return 0;
